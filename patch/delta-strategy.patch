@@ -1,4 +1,4 @@
-From a8a6f1af87ecdf5ee4d2996bacf1fd1717790c36 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Ashwin Mahadevan <mahadevan@ashwinm.com>
 Date: Fri, 1 May 2026 01:48:23 -0700
 Subject: [PATCH] pack-objects: add --delta-strategy, --record-strategy,
@@ -8,7 +8,7 @@ Add support for delegating delta parent selection to an external
 process. When --delta-strategy=<cmd> is given, pack-objects groups
 candidates by object type, invokes the command once per type, streams
 candidate descriptors via stdin, reads back (child, parent)
-assignments, topologically sorts them, and applies them directly.
+assignments, and applies them directly.
 
 Also add --record-strategy=<file> to dump the default algorithm's
 assignments for replay/comparison, and --include-reused to include
@@ -16,11 +16,11 @@ entries with reused on-disk deltas in the strategy input.
 
 Based on git v2.47.0 (777489f9e0).
 ---
- builtin/pack-objects.c | 366 ++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 363 insertions(+), 3 deletions(-)
+ builtin/pack-objects.c | 302 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 299 insertions(+), 3 deletions(-)
 
 diff --git a/builtin/pack-objects.c b/builtin/pack-objects.c
-index 0fc0680b40..e607dae84d 100644
+index 0fc0680b40..6fdc8e5100 100644
 --- a/builtin/pack-objects.c
 +++ b/builtin/pack-objects.c
 @@ -38,6 +38,7 @@
@@ -29,12 +29,12 @@ index 0fc0680b40..e607dae84d 100644
  #include "pack-mtimes.h"
 +#include "run-command.h"
  #include "parse-options.h"
- 
+
  /*
 @@ -242,6 +243,10 @@ static int exclude_promisor_objects;
- 
+
  static int use_delta_islands;
- 
+
 +static const char *delta_strategy_cmd;
 +static const char *record_strategy_file;
 +static int include_reused;
@@ -42,10 +42,10 @@ index 0fc0680b40..e607dae84d 100644
  static unsigned long delta_cache_size = 0;
  static unsigned long max_delta_cache_size = DEFAULT_DELTA_CACHE_SIZE;
  static unsigned long cache_max_small_delta_size = 1000;
-@@ -3167,6 +3172,337 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
+@@ -3167,6 +3172,274 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
  	return 0;
  }
- 
+
 +
 +/*
 + * --delta-strategy=<cmd> support.
@@ -166,66 +166,6 @@ index 0fc0680b40..e607dae84d 100644
 +	return 0;
 +}
 +
-+static void topo_sort_proposals(struct strategy_proposal *proposals, unsigned nr)
-+{
-+	unsigned i, j;
-+	unsigned *indegree;
-+	unsigned *order;
-+	unsigned order_nr = 0;
-+	unsigned *queue;
-+	unsigned queue_head = 0, queue_tail = 0;
-+
-+	CALLOC_ARRAY(indegree, nr);
-+	ALLOC_ARRAY(order, nr);
-+	ALLOC_ARRAY(queue, nr);
-+
-+	for (i = 0; i < nr; i++) {
-+		if (!proposals[i].parent)
-+			continue;
-+		for (j = 0; j < nr; j++) {
-+			if (j == i)
-+				continue;
-+			if (proposals[j].child == proposals[i].parent) {
-+				indegree[i]++;
-+				break;
-+			}
-+		}
-+	}
-+
-+	for (i = 0; i < nr; i++) {
-+		if (indegree[i] == 0)
-+			queue[queue_tail++] = i;
-+	}
-+
-+	while (queue_head < queue_tail) {
-+		unsigned cur = queue[queue_head++];
-+		order[order_nr++] = cur;
-+
-+		for (i = 0; i < nr; i++) {
-+			if (proposals[i].parent == proposals[cur].child) {
-+				if (--indegree[i] == 0)
-+					queue[queue_tail++] = i;
-+			}
-+		}
-+	}
-+
-+	if (order_nr != nr)
-+		die(_("delta strategy proposals contain a cycle"));
-+
-+	{
-+		struct strategy_proposal *tmp;
-+		ALLOC_ARRAY(tmp, nr);
-+		for (i = 0; i < nr; i++)
-+			tmp[i] = proposals[order[i]];
-+		COPY_ARRAY(proposals, tmp, nr);
-+		free(tmp);
-+	}
-+
-+	free(indegree);
-+	free(order);
-+	free(queue);
-+}
-+
 +static void apply_strategy_proposals(struct strategy_proposal *proposals,
 +				     unsigned nr)
 +{
@@ -278,7 +218,6 @@ index 0fc0680b40..e607dae84d 100644
 +
 +		SET_DELTA(p->child, p->parent);
 +		SET_DELTA_SIZE(p->child, delta_size);
-+		p->child->depth = p->parent->depth + 1;
 +		strategy_stat_accepted++;
 +	}
 +}
@@ -312,10 +251,8 @@ index 0fc0680b40..e607dae84d 100644
 +	if (finish_command(&strategy))
 +		die(_("delta strategy command failed: %s"), delta_strategy_cmd);
 +
-+	if (proposal_nr > 0) {
-+		topo_sort_proposals(proposals, proposal_nr);
++	if (proposal_nr > 0)
 +		apply_strategy_proposals(proposals, proposal_nr);
-+	}
 +
 +	free(proposals);
 +}
@@ -380,10 +317,10 @@ index 0fc0680b40..e607dae84d 100644
  static void prepare_pack(int window, int depth)
  {
  	struct object_entry **delta_list;
-@@ -3197,11 +3533,13 @@ static void prepare_pack(int window, int depth)
+@@ -3197,11 +3470,13 @@ static void prepare_pack(int window, int depth)
  	for (i = 0; i < to_pack.nr_objects; i++) {
  		struct object_entry *entry = to_pack.objects + i;
- 
+
 -		if (DELTA(entry))
 +		if (DELTA(entry)) {
  			/* This happens if we decided to reuse existing
@@ -393,13 +330,13 @@ index 0fc0680b40..e607dae84d 100644
 +			if (!include_reused || !delta_strategy_cmd)
 +				continue;
 +		}
- 
+
  		if (!entry->type_valid ||
  		    oe_size_less_than(&to_pack, entry, 50))
-@@ -3228,7 +3566,16 @@ static void prepare_pack(int window, int depth)
+@@ -3228,7 +3503,16 @@ static void prepare_pack(int window, int depth)
  		delta_list[n++] = entry;
  	}
- 
+
 -	if (nr_deltas && n > 1) {
 +	if (delta_strategy_cmd) {
 +		if (n > 0) {
@@ -412,9 +349,9 @@ index 0fc0680b40..e607dae84d 100644
 +		}
 +	} else if (nr_deltas && n > 1) {
  		unsigned nr_done = 0;
- 
+
  		if (progress)
-@@ -3239,7 +3586,12 @@ static void prepare_pack(int window, int depth)
+@@ -3239,7 +3523,12 @@ static void prepare_pack(int window, int depth)
  		stop_progress(&progress_state);
  		if (nr_done != nr_deltas)
  			die(_("inconsistency with delta count"));
@@ -426,8 +363,8 @@ index 0fc0680b40..e607dae84d 100644
 +
  	free(delta_list);
  }
- 
-@@ -4426,6 +4778,14 @@ int cmd_pack_objects(int argc,
+
+@@ -4426,6 +4715,14 @@ int cmd_pack_objects(int argc,
  			 N_("do not pack objects in promisor packfiles")),
  		OPT_BOOL(0, "delta-islands", &use_delta_islands,
  			 N_("respect islands during delta compression")),
@@ -442,6 +379,5 @@ index 0fc0680b40..e607dae84d 100644
  		OPT_STRING_LIST(0, "uri-protocol", &uri_protocols,
  				N_("protocol"),
  				N_("exclude any configured uploadpack.blobpackfileuri with this protocol")),
--- 
-2.43.0
-
+--
+2.47.0
