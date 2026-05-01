@@ -179,9 +179,11 @@ python3 harness/verify.py --layer 6
 ## Project layout
 
 ```
-├── git/                          # git subtree with delta-strategy support (based on v2.47.0)
+├── patch/
+│   └── delta-strategy.patch      # patch applied on top of upstream git
+├── git/                          # cloned + patched by build.sh (not tracked)
 ├── harness/
-│   ├── build.sh                  # idempotent: builds git + oracle
+│   ├── build.sh                  # idempotent: clones git, applies patch, builds
 │   ├── run.py                    # (strategy × repo) → pack size + stats
 │   ├── verify.py                 # 6-layer verification suite
 │   └── setup-corpus.sh           # clones test repos into corpus/
