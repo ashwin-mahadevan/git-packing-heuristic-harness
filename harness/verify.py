@@ -306,25 +306,25 @@ def _parse_strategy_trace2(trace2_file):
 
 
 def _check_stat_identity(stats, label):
-    proposed = stats.get("proposed", 0)
+    attempted = stats.get("attempted", 0)
     accepted = stats.get("accepted", 0)
 
     issues = []
-    if proposed != accepted:
+    if attempted != accepted:
         issues.append(
-            f"{label}: proposed({proposed}) != accepted({accepted})"
+            f"{label}: attempted({attempted}) != accepted({accepted})"
         )
-    return issues, proposed, accepted
+    return issues, attempted, accepted
 
 
 def layer5_stats(repo_path):
-    """Stat reconciliation: proposed - rejected_total == accepted."""
+    """Stat reconciliation: attempted == accepted."""
     issues = []
 
     with tempfile.TemporaryDirectory(prefix="verify-l5-") as tmpdir:
         obj_list = get_object_list(HARNESS_GIT, repo_path)
 
-        # --- Test with none strategy (should have 0 proposed, 0 accepted) ---
+        # --- Test with none strategy (should have 0 attempted, 0 accepted) ---
         trace2_none = os.path.join(tmpdir, "trace2-none.json")
         none_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'none.py')}"
         base = os.path.join(tmpdir, "stats-none")
@@ -370,14 +370,14 @@ def layer5_stats(repo_path):
         if not stats_replay:
             return False, "No trace2 stats from replay strategy"
 
-        i, proposed, accepted = _check_stat_identity(stats_replay, "replay")
+        i, attempted, accepted = _check_stat_identity(stats_replay, "replay")
         issues.extend(i)
 
         if issues:
             return False, "; ".join(issues)
 
         return True, (f"Stats consistent: none=[0/0], "
-                      f"replay=[proposed={proposed}, accepted={accepted}]")
+                      f"replay=[attempted={attempted}, accepted={accepted}]")
 
 
 def layer6_corpus(corpus_dir):

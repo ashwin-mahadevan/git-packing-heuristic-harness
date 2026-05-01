@@ -37,6 +37,8 @@ A strategy is any executable that reads object descriptors from stdin and writes
 
 **Important:** Your strategy is invoked once per object type (commit, tree, blob, tag). All objects in a single invocation share the same type, so cross-type delta assignments are impossible by construction. Git trusts your assignments directly — it will not second-guess your parent choices with size budgets or depth limits. If you assign a bad parent, the resulting pack gets bigger; that's your signal to improve.
 
+**Protocol requirements:** Your strategy must read all of stdin before writing any output. Git writes all descriptors and closes stdin before reading your stdout — a strategy that writes before consuming all input will deadlock on large repos.
+
 ### Input (git writes to your stdin)
 
 One line per candidate object, terminated by a blank line:
@@ -63,6 +65,7 @@ One line per non-preferred-base object you received, terminated by a blank line:
 ```
 
 - Emit exactly one line for each input object where `preferred_base` is `0`.
+- Each `child_oid` must appear at most once. If duplicated, only the last assignment takes effect.
 - `NONE` means "store this object in full" (no delta).
 - `parent_oid` must be the OID of another object from the input list (or a thin-pack-eligible external base).
 - Your assignments must not contain cycles. Depth is your responsibility — chains deeper than `--depth` (default 50) will be written as-is.
@@ -135,7 +138,7 @@ Output:
   Pack size: 1,234,567 bytes
   Elapsed:  2.31s
   Stats:
-    delta-strategy/proposed: 4200
+    delta-strategy/attempted: 4200
     delta-strategy/accepted: 4200
 ============================================================
 ```
@@ -203,7 +206,7 @@ python3 harness/verify.py --layer 6
 
 The git fork adds three flags to `git pack-objects`:
 
-- **`--delta-strategy=<cmd>`** — replaces the sort + `ll_find_deltas` block in `prepare_pack()` with a subprocess protocol. Git groups candidates by object type, invokes `<cmd>` once per type, streams descriptors, reads back `(child, parent)` assignments, sorts them topologically, and applies them directly. Git trusts the strategy's choices — no size-budget or depth filtering is applied.
+- **`--delta-strategy=<cmd>`** — replaces the sort + `ll_find_deltas` block in `prepare_pack()` with a subprocess protocol. Git groups candidates by object type, invokes `<cmd>` once per type, streams descriptors, reads back `(child, parent)` assignments, and applies them directly. Git trusts the strategy's choices — no size-budget or depth filtering is applied.
 
 - **`--record-strategy=<file>`** — after a normal delta-finding run, dumps the `(child, parent)` pairs that were actually selected. Used by `strategies/replay.py` for fidelity testing.
 

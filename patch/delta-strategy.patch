@@ -17,10 +17,10 @@ entries with reused on-disk deltas in the strategy input.
 Based on git v2.47.0 (777489f9e0).
 ---
  builtin/pack-objects.c | 302 ++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 299 insertions(+), 3 deletions(-)
+ 1 file changed, 298 insertions(+), 4 deletions(-)
 
 diff --git a/builtin/pack-objects.c b/builtin/pack-objects.c
-index 0fc0680b40..6fdc8e5100 100644
+index 0fc0680b40..4666069100 100644
 --- a/builtin/pack-objects.c
 +++ b/builtin/pack-objects.c
 @@ -38,6 +38,7 @@
@@ -42,7 +42,7 @@ index 0fc0680b40..6fdc8e5100 100644
  static unsigned long delta_cache_size = 0;
  static unsigned long max_delta_cache_size = DEFAULT_DELTA_CACHE_SIZE;
  static unsigned long cache_max_small_delta_size = 1000;
-@@ -3167,6 +3172,274 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
+@@ -3167,6 +3172,273 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
  	return 0;
  }
 
@@ -63,7 +63,7 @@ index 0fc0680b40..6fdc8e5100 100644
 +	struct object_id parent_oid;
 +};
 +
-+static intmax_t strategy_stat_proposed;
++static intmax_t strategy_stat_attempted;
 +static intmax_t strategy_stat_accepted;
 +
 +static struct object_entry *find_entry_by_oid(const struct object_id *oid)
@@ -83,7 +83,7 @@ index 0fc0680b40..6fdc8e5100 100644
 +		struct object_entry *reused_base = DELTA(entry);
 +
 +		strbuf_reset(&buf);
-+		strbuf_addf(&buf, "%s %s %lu %08x %d %s\n",
++		strbuf_addf(&buf, "%s %s %lu %08"PRIx32" %d %s\n",
 +			    oid_to_hex(&entry->idx.oid),
 +			    type_str,
 +			    size,
@@ -101,8 +101,8 @@ index 0fc0680b40..6fdc8e5100 100644
 +	strbuf_release(&buf);
 +}
 +
-+static int read_assignments(FILE *fp, struct strategy_proposal **out,
-+			    unsigned *out_nr)
++static void read_assignments(FILE *fp, struct strategy_proposal **out,
++			     unsigned *out_nr)
 +{
 +	struct strbuf line = STRBUF_INIT;
 +	struct strategy_proposal *proposals = NULL;
@@ -163,7 +163,6 @@ index 0fc0680b40..6fdc8e5100 100644
 +
 +	*out = proposals;
 +	*out_nr = nr;
-+	return 0;
 +}
 +
 +static void apply_strategy_proposals(struct strategy_proposal *proposals,
@@ -180,7 +179,7 @@ index 0fc0680b40..6fdc8e5100 100644
 +		if (!p->parent && !p->parent_is_ext)
 +			continue;
 +
-+		strategy_stat_proposed++;
++		strategy_stat_attempted++;
 +
 +		if (p->parent_is_ext) {
 +			SET_DELTA_EXT(p->child, &p->parent_oid);
@@ -263,7 +262,7 @@ index 0fc0680b40..6fdc8e5100 100644
 +	int types[] = { OBJ_COMMIT, OBJ_TREE, OBJ_BLOB, OBJ_TAG };
 +	unsigned t;
 +
-+	strategy_stat_proposed = 0;
++	strategy_stat_attempted = 0;
 +	strategy_stat_accepted = 0;
 +
 +	for (t = 0; t < ARRAY_SIZE(types); t++) {
@@ -283,7 +282,7 @@ index 0fc0680b40..6fdc8e5100 100644
 +	}
 +
 +	trace2_data_intmax("pack-objects", the_repository,
-+			   "delta-strategy/proposed", strategy_stat_proposed);
++			   "delta-strategy/attempted", strategy_stat_attempted);
 +	trace2_data_intmax("pack-objects", the_repository,
 +			   "delta-strategy/accepted", strategy_stat_accepted);
 +}
@@ -317,6 +316,16 @@ index 0fc0680b40..6fdc8e5100 100644
  static void prepare_pack(int window, int depth)
  {
  	struct object_entry **delta_list;
+@@ -3188,7 +3460,8 @@ static void prepare_pack(int window, int depth)
+ 	if (!pack_to_stdout)
+ 		do_check_packed_object_crc = 1;
+
+-	if (!to_pack.nr_objects || !window || !depth)
++	if (!to_pack.nr_objects ||
++	    (!delta_strategy_cmd && (!window || !depth)))
+ 		return;
+
+ 	ALLOC_ARRAY(delta_list, to_pack.nr_objects);
 @@ -3197,11 +3470,13 @@ static void prepare_pack(int window, int depth)
  	for (i = 0; i < to_pack.nr_objects; i++) {
  		struct object_entry *entry = to_pack.objects + i;
@@ -333,25 +342,19 @@ index 0fc0680b40..6fdc8e5100 100644
 
  		if (!entry->type_valid ||
  		    oe_size_less_than(&to_pack, entry, 50))
-@@ -3228,7 +3503,16 @@ static void prepare_pack(int window, int depth)
+@@ -3228,7 +3503,10 @@ static void prepare_pack(int window, int depth)
  		delta_list[n++] = entry;
  	}
 
 -	if (nr_deltas && n > 1) {
 +	if (delta_strategy_cmd) {
-+		if (n > 0) {
-+			if (progress)
-+				progress_state = start_progress(
-+					_("Running external delta strategy"),
-+					nr_deltas);
++		if (n > 0)
 +			run_external_delta_strategy(delta_list, n);
-+			stop_progress(&progress_state);
-+		}
 +	} else if (nr_deltas && n > 1) {
  		unsigned nr_done = 0;
 
  		if (progress)
-@@ -3239,7 +3523,12 @@ static void prepare_pack(int window, int depth)
+@@ -3239,7 +3517,12 @@ static void prepare_pack(int window, int depth)
  		stop_progress(&progress_state);
  		if (nr_done != nr_deltas)
  			die(_("inconsistency with delta count"));
@@ -364,7 +367,7 @@ index 0fc0680b40..6fdc8e5100 100644
  	free(delta_list);
  }
 
-@@ -4426,6 +4715,14 @@ int cmd_pack_objects(int argc,
+@@ -4426,6 +4709,14 @@ int cmd_pack_objects(int argc,
  			 N_("do not pack objects in promisor packfiles")),
  		OPT_BOOL(0, "delta-islands", &use_delta_islands,
  			 N_("respect islands during delta compression")),
