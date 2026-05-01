@@ -1,4 +1,0 @@
-[submodule "git"]
-	path = git
-	url = https://github.com/ashwin-mahadevan/git.git
-	branch = delta-strategy-v2.47.0
