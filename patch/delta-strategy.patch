@@ -1,30 +1,5 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Ashwin Mahadevan <mahadevan@ashwinm.com>
-Date: Fri, 1 May 2026 01:48:23 -0700
-Subject: [PATCH] pack-objects: add --delta-strategy, --record-strategy,
- --include-reused
-
-Add support for delegating delta parent selection to an external
-process. When --delta-strategy=<cmd> is given, pack-objects groups
-candidates by object type, invokes the command once per type, streams
-candidate descriptors via stdin, reads back (child, parent)
-assignments, and applies them directly.
-
-Delta size computation is deferred to pack writing: apply_strategy_proposals
-only sets the DELTA parent pointer, and get_delta computes the actual
-delta size when the pack is written.
-
-Also add --record-strategy=<file> to dump the default algorithm's
-assignments for replay/comparison, and --include-reused to include
-entries with reused on-disk deltas in the strategy input.
-
-Based on git v2.47.0 (777489f9e0).
----
- builtin/pack-objects.c | 286 ++++++++++++++++++++++++++++++++++++++---
- 1 file changed, 268 insertions(+), 18 deletions(-)
-
 diff --git a/builtin/pack-objects.c b/builtin/pack-objects.c
-index 0fc0680b40..81ab6bb100 100644
+index 0fc0680..9144a39 100644
 --- a/builtin/pack-objects.c
 +++ b/builtin/pack-objects.c
 @@ -38,6 +38,7 @@
@@ -33,12 +8,12 @@ index 0fc0680b40..81ab6bb100 100644
  #include "pack-mtimes.h"
 +#include "run-command.h"
  #include "parse-options.h"
-
+ 
  /*
 @@ -242,6 +243,10 @@ static int exclude_promisor_objects;
-
+ 
  static int use_delta_islands;
-
+ 
 +static const char *delta_strategy_cmd;
 +static const char *record_strategy_file;
 +static int include_reused;
@@ -64,10 +39,10 @@ index 0fc0680b40..81ab6bb100 100644
  	free(buf);
  	free(base_buf);
  	return delta_buf;
-@@ -3167,6 +3169,239 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
+@@ -3167,6 +3169,224 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
  	return 0;
  }
-
+ 
 +
 +/*
 + * --delta-strategy=<cmd> support.
@@ -84,9 +59,6 @@ index 0fc0680b40..81ab6bb100 100644
 +	int parent_is_ext;
 +	struct object_id parent_oid;
 +};
-+
-+static intmax_t strategy_stat_attempted;
-+static intmax_t strategy_stat_accepted;
 +
 +static struct object_entry *find_entry_by_oid(const struct object_id *oid)
 +{
@@ -198,14 +170,10 @@ index 0fc0680b40..81ab6bb100 100644
 +		if (!p->parent && !p->parent_is_ext)
 +			continue;
 +
-+		strategy_stat_attempted++;
-+
 +		if (p->parent_is_ext)
 +			SET_DELTA_EXT(p->child, &p->parent_oid);
 +		else
 +			SET_DELTA(p->child, p->parent);
-+
-+		strategy_stat_accepted++;
 +	}
 +}
 +
@@ -250,9 +218,6 @@ index 0fc0680b40..81ab6bb100 100644
 +	int types[] = { OBJ_COMMIT, OBJ_TREE, OBJ_BLOB, OBJ_TAG };
 +	unsigned t;
 +
-+	strategy_stat_attempted = 0;
-+	strategy_stat_accepted = 0;
-+
 +	for (t = 0; t < ARRAY_SIZE(types); t++) {
 +		struct object_entry **type_list;
 +		unsigned type_n = 0, i;
@@ -268,11 +233,6 @@ index 0fc0680b40..81ab6bb100 100644
 +
 +		free(type_list);
 +	}
-+
-+	trace2_data_intmax("pack-objects", the_repository,
-+			   "delta-strategy/attempted", strategy_stat_attempted);
-+	trace2_data_intmax("pack-objects", the_repository,
-+			   "delta-strategy/accepted", strategy_stat_accepted);
 +}
 +
 +static void record_strategy_results(struct object_entry **delta_list,
@@ -304,20 +264,20 @@ index 0fc0680b40..81ab6bb100 100644
  static void prepare_pack(int window, int depth)
  {
  	struct object_entry **delta_list;
-@@ -3188,7 +3423,8 @@ static void prepare_pack(int window, int depth)
+@@ -3188,7 +3408,8 @@ static void prepare_pack(int window, int depth)
  	if (!pack_to_stdout)
  		do_check_packed_object_crc = 1;
-
+ 
 -	if (!to_pack.nr_objects || !window || !depth)
 +	if (!to_pack.nr_objects ||
 +	    (!delta_strategy_cmd && (!window || !depth)))
  		return;
-
+ 
  	ALLOC_ARRAY(delta_list, to_pack.nr_objects);
-@@ -3197,11 +3433,13 @@ static void prepare_pack(int window, int depth)
+@@ -3197,11 +3418,13 @@ static void prepare_pack(int window, int depth)
  	for (i = 0; i < to_pack.nr_objects; i++) {
  		struct object_entry *entry = to_pack.objects + i;
-
+ 
 -		if (DELTA(entry))
 +		if (DELTA(entry)) {
  			/* This happens if we decided to reuse existing
@@ -327,22 +287,22 @@ index 0fc0680b40..81ab6bb100 100644
 +			if (!include_reused || !delta_strategy_cmd)
 +				continue;
 +		}
-
+ 
  		if (!entry->type_valid ||
  		    oe_size_less_than(&to_pack, entry, 50))
-@@ -3228,7 +3466,10 @@ static void prepare_pack(int window, int depth)
+@@ -3228,7 +3451,10 @@ static void prepare_pack(int window, int depth)
  		delta_list[n++] = entry;
  	}
-
+ 
 -	if (nr_deltas && n > 1) {
 +	if (delta_strategy_cmd) {
 +		if (n > 0)
 +			run_external_delta_strategy(delta_list, n);
 +	} else if (nr_deltas && n > 1) {
  		unsigned nr_done = 0;
-
+ 
  		if (progress)
-@@ -3239,7 +3480,12 @@ static void prepare_pack(int window, int depth)
+@@ -3239,7 +3465,12 @@ static void prepare_pack(int window, int depth)
  		stop_progress(&progress_state);
  		if (nr_done != nr_deltas)
  			die(_("inconsistency with delta count"));
@@ -354,8 +314,8 @@ index 0fc0680b40..81ab6bb100 100644
 +
  	free(delta_list);
  }
-
-@@ -4426,6 +4672,14 @@ int cmd_pack_objects(int argc,
+ 
+@@ -4426,6 +4657,14 @@ int cmd_pack_objects(int argc,
  			 N_("do not pack objects in promisor packfiles")),
  		OPT_BOOL(0, "delta-islands", &use_delta_islands,
  			 N_("respect islands during delta compression")),
@@ -370,5 +330,3 @@ index 0fc0680b40..81ab6bb100 100644
  		OPT_STRING_LIST(0, "uri-protocol", &uri_protocols,
  				N_("protocol"),
  				N_("exclude any configured uploadpack.blobpackfileuri with this protocol")),
---
-2.47.0

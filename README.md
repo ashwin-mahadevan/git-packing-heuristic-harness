@@ -137,9 +137,6 @@ Output:
   Strategy: my-strategy
   Pack size: 1,234,567 bytes
   Elapsed:  2.31s
-  Stats:
-    delta-strategy/attempted: 4200
-    delta-strategy/accepted: 4200
 ============================================================
 ```
 
@@ -151,14 +148,14 @@ All runs are logged to `results/runs.jsonl` for later analysis.
 
 ## Verifying correctness
 
-A smaller pack is only useful if it's valid. `harness/verify.py` runs six verification layers:
+A smaller pack is only useful if it's valid. `harness/verify.py` runs five verification layers:
 
 ```bash
 # Run all layers on a single repo
 python3 harness/verify.py --repo corpus/my-repo
 
 # Run all layers across every repo in corpus/
-python3 harness/verify.py --layer 6
+python3 harness/verify.py --layer 5
 ```
 
 | Layer | What it checks |
@@ -167,8 +164,7 @@ python3 harness/verify.py --layer 6
 | 2 | Pack validity: `index-pack`, `verify-pack`, `fsck`, object-list diff |
 | 3 | Bracket tests: `none` strategy matches `--window=0`; `replay` matches default |
 | 4 | Determinism: 3 consecutive runs produce byte-identical packs |
-| 5 | Stat reconciliation: `proposed == accepted` |
-| 6 | Corpus sweep: layers 1-5 across all repos in `corpus/` |
+| 5 | Corpus sweep: layers 1-4 across all repos in `corpus/` |
 
 ## Included strategies
 

@@ -10,12 +10,10 @@ Layers:
   2. Pack validity: index-pack, verify-pack, fsck, clone, object-list diff
   3. Bracket strategies: none == window=0; replay == default
   4. Determinism: 3x back-to-back identical packs
-  5. Stat reconciliation: trace2 identities hold
-  6. Corpus sweep: layers 1-5 across all repos in corpus/
+  5. Corpus sweep: layers 1-4 across all repos in corpus/
 """
 import argparse
 import hashlib
-import json
 import os
 import shutil
 import subprocess
@@ -285,103 +283,8 @@ def layer4_determinism(repo_path, strategy_cmd=None):
         return True, f"Deterministic across 3 runs"
 
 
-def _parse_strategy_trace2(trace2_file):
-    stats = {}
-    with open(trace2_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if (event.get("event") == "data" and
-                event.get("category") == "pack-objects"):
-                key = event.get("key", "")
-                if key.startswith("delta-strategy/"):
-                    short_key = key.replace("delta-strategy/", "")
-                    stats[short_key] = int(event.get("value", 0))
-    return stats
-
-
-def _check_stat_identity(stats, label):
-    attempted = stats.get("attempted", 0)
-    accepted = stats.get("accepted", 0)
-
-    issues = []
-    if attempted != accepted:
-        issues.append(
-            f"{label}: attempted({attempted}) != accepted({accepted})"
-        )
-    return issues, attempted, accepted
-
-
-def layer5_stats(repo_path):
-    """Stat reconciliation: attempted == accepted."""
-    issues = []
-
-    with tempfile.TemporaryDirectory(prefix="verify-l5-") as tmpdir:
-        obj_list = get_object_list(HARNESS_GIT, repo_path)
-
-        # --- Test with none strategy (should have 0 attempted, 0 accepted) ---
-        trace2_none = os.path.join(tmpdir, "trace2-none.json")
-        none_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'none.py')}"
-        base = os.path.join(tmpdir, "stats-none")
-        _, err = pack_objects(
-            HARNESS_GIT, repo_path, base, obj_list,
-            extra_args=[f"--delta-strategy={none_strategy}"],
-            env_extra={"GIT_TRACE2_EVENT": trace2_none},
-        )
-        if err:
-            return False, f"none strategy pack failed: {err}"
-
-        stats_none = _parse_strategy_trace2(trace2_none)
-        if not stats_none:
-            return False, "No trace2 stats from none strategy"
-
-        if stats_none.get("accepted", 0) != 0:
-            issues.append(f"none: accepted={stats_none['accepted']}, expected 0")
-        i, _, _ = _check_stat_identity(stats_none, "none")
-        issues.extend(i)
-
-        # --- Test with replay strategy (should have actual deltas) ---
-        record_file = os.path.join(tmpdir, "default.record")
-        base_default = os.path.join(tmpdir, "default")
-        _, err = pack_objects(
-            HARNESS_GIT, repo_path, base_default, obj_list,
-            extra_args=[f"--record-strategy={record_file}"],
-        )
-        if err:
-            return False, f"default (record) pack failed: {err}"
-
-        trace2_replay = os.path.join(tmpdir, "trace2-replay.json")
-        replay_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'replay.py')} {record_file}"
-        base_replay = os.path.join(tmpdir, "stats-replay")
-        _, err = pack_objects(
-            HARNESS_GIT, repo_path, base_replay, obj_list,
-            extra_args=[f"--delta-strategy={replay_strategy}"],
-            env_extra={"GIT_TRACE2_EVENT": trace2_replay},
-        )
-        if err:
-            return False, f"replay strategy pack failed: {err}"
-
-        stats_replay = _parse_strategy_trace2(trace2_replay)
-        if not stats_replay:
-            return False, "No trace2 stats from replay strategy"
-
-        i, attempted, accepted = _check_stat_identity(stats_replay, "replay")
-        issues.extend(i)
-
-        if issues:
-            return False, "; ".join(issues)
-
-        return True, (f"Stats consistent: none=[0/0], "
-                      f"replay=[attempted={attempted}, accepted={accepted}]")
-
-
-def layer6_corpus(corpus_dir):
-    """Run layers 1-5 across every repo in corpus/."""
+def layer5_corpus(corpus_dir):
+    """Run layers 1-4 across every repo in corpus/."""
     if not os.path.isdir(corpus_dir):
         return False, f"Corpus directory not found: {corpus_dir}"
 
@@ -402,8 +305,7 @@ def layer6_corpus(corpus_dir):
         print(f"\n--- Corpus: {repo_name} ---")
 
         for layer_num, layer_fn in [(1, layer1_noop), (2, layer2_validity),
-                                     (3, layer3_brackets), (4, layer4_determinism),
-                                     (5, layer5_stats)]:
+                                     (3, layer3_brackets), (4, layer4_determinism)]:
             try:
                 if layer_num == 2:
                     passed, msg = layer_fn(repo_path)
@@ -424,7 +326,7 @@ def layer6_corpus(corpus_dir):
 def main():
     parser = argparse.ArgumentParser(description="Verification layers")
     parser.add_argument("--repo", help="Path to test repo")
-    parser.add_argument("--layer", type=int, choices=[1, 2, 3, 4, 5, 6],
+    parser.add_argument("--layer", type=int, choices=[1, 2, 3, 4, 5],
                         help="Run specific layer (default: all)")
     parser.add_argument("--corpus", default=os.path.join(HARNESS_ROOT, "corpus"),
                         help="Corpus directory for layer 6")
@@ -435,19 +337,18 @@ def main():
         2: ("Pack validity", lambda: layer2_validity(args.repo)),
         3: ("Bracket strategies", lambda: layer3_brackets(args.repo)),
         4: ("Determinism", lambda: layer4_determinism(args.repo)),
-        5: ("Stat reconciliation", lambda: layer5_stats(args.repo)),
-        6: ("Corpus sweep", lambda: layer6_corpus(args.corpus)),
+        5: ("Corpus sweep", lambda: layer5_corpus(args.corpus)),
     }
 
     if args.layer:
         run_layers = [args.layer]
     elif args.repo:
-        run_layers = [1, 2, 3, 4, 5]
+        run_layers = [1, 2, 3, 4]
     else:
-        run_layers = [6]
+        run_layers = [5]
 
-    if any(l != 6 for l in run_layers) and not args.repo:
-        print("Error: --repo required for layers 1-5", file=sys.stderr)
+    if any(l != 5 for l in run_layers) and not args.repo:
+        print("Error: --repo required for layers 1-4", file=sys.stderr)
         sys.exit(1)
 
     all_passed = True

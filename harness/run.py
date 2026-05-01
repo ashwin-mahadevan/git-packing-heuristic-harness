@@ -33,7 +33,6 @@ def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
       - pack_file: path to .pack
       - pack_size: size in bytes
       - elapsed: wall-clock seconds
-      - trace2_stats: dict of delta-strategy/* trace2 data (if strategy used)
       - idx_file: path to .idx
     """
     with tempfile.TemporaryDirectory(prefix="harness-") as tmpdir:
@@ -66,10 +65,7 @@ def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
         if extra_args:
             cmd.extend(extra_args)
 
-        # Set up trace2 to capture stats
         env = os.environ.copy()
-        trace2_file = os.path.join(tmpdir, "trace2.json")
-        env["GIT_TRACE2_EVENT"] = trace2_file
 
         t0 = time.monotonic()
         result = subprocess.run(
@@ -92,9 +88,6 @@ def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
         pack_size = os.path.getsize(pack_file)
         pack_hash = hashlib.sha1(result.stdout).hexdigest()
 
-        # Parse trace2 for delta-strategy stats
-        trace2_stats = parse_trace2_stats(trace2_file)
-
         # Copy pack and idx to results dir for further analysis
         results_dir = os.path.join(HARNESS_ROOT, "results")
         os.makedirs(results_dir, exist_ok=True)
@@ -111,29 +104,8 @@ def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
             "idx_file": final_idx,
             "pack_size": pack_size,
             "elapsed": elapsed,
-            "trace2_stats": trace2_stats,
             "pack_hash": pack_hash,
         }
-
-
-def parse_trace2_stats(trace2_file):
-    stats = {}
-    if not os.path.exists(trace2_file):
-        return stats
-    with open(trace2_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("event") == "data" and event.get("category") == "pack-objects":
-                key = event.get("key", "")
-                if key.startswith("delta-strategy/"):
-                    stats[key] = event.get("value")
-    return stats
 
 
 def main():
@@ -183,10 +155,6 @@ def main():
     print(f"  Strategy: {label}")
     print(f"  Pack size: {result['pack_size']:,} bytes")
     print(f"  Elapsed:  {result['elapsed']:.2f}s")
-    if result['trace2_stats']:
-        print(f"  Stats:")
-        for k, v in sorted(result['trace2_stats'].items()):
-            print(f"    {k}: {v}")
     print(f"  Pack:     {result['pack_file']}")
     print(f"{'='*60}")
 
@@ -198,7 +166,6 @@ def main():
             "strategy": label,
             "pack_size": result["pack_size"],
             "elapsed": result["elapsed"],
-            "trace2_stats": result["trace2_stats"],
             "pack_hash": result["pack_hash"],
             "timestamp": time.time(),
         }
