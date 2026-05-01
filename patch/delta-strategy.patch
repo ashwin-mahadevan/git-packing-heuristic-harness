@@ -10,17 +10,21 @@ candidates by object type, invokes the command once per type, streams
 candidate descriptors via stdin, reads back (child, parent)
 assignments, and applies them directly.
 
+Delta size computation is deferred to pack writing: apply_strategy_proposals
+only sets the DELTA parent pointer, and get_delta computes the actual
+delta size when the pack is written.
+
 Also add --record-strategy=<file> to dump the default algorithm's
 assignments for replay/comparison, and --include-reused to include
 entries with reused on-disk deltas in the strategy input.
 
 Based on git v2.47.0 (777489f9e0).
 ---
- builtin/pack-objects.c | 302 ++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 298 insertions(+), 4 deletions(-)
+ builtin/pack-objects.c | 286 ++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 268 insertions(+), 18 deletions(-)
 
 diff --git a/builtin/pack-objects.c b/builtin/pack-objects.c
-index 0fc0680b40..4666069100 100644
+index 0fc0680b40..81ab6bb100 100644
 --- a/builtin/pack-objects.c
 +++ b/builtin/pack-objects.c
 @@ -38,6 +38,7 @@
@@ -42,7 +46,25 @@ index 0fc0680b40..4666069100 100644
  static unsigned long delta_cache_size = 0;
  static unsigned long max_delta_cache_size = DEFAULT_DELTA_CACHE_SIZE;
  static unsigned long cache_max_small_delta_size = 1000;
-@@ -3167,6 +3172,273 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
+@@ -308,13 +313,10 @@ static void *get_delta(struct object_entry *entry)
+ 		    oid_to_hex(&DELTA(entry)->idx.oid));
+ 	delta_buf = diff_delta(base_buf, base_size,
+ 			       buf, size, &delta_size, 0);
+-	/*
+-	 * We successfully computed this delta once but dropped it for
+-	 * memory reasons. Something is very wrong if this time we
+-	 * recompute and create a different delta.
+-	 */
+-	if (!delta_buf || delta_size != DELTA_SIZE(entry))
+-		BUG("delta size changed");
++	if (!delta_buf)
++		BUG("delta computation failed for %s",
++		    oid_to_hex(&entry->idx.oid));
++	SET_DELTA_SIZE(entry, delta_size);
+ 	free(buf);
+ 	free(base_buf);
+ 	return delta_buf;
+@@ -3167,6 +3169,239 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
  	return 0;
  }
 
@@ -172,51 +194,17 @@ index 0fc0680b40..4666069100 100644
 +
 +	for (i = 0; i < nr; i++) {
 +		struct strategy_proposal *p = &proposals[i];
-+		void *trg_buf, *src_buf, *delta_buf;
-+		unsigned long trg_size, src_size, delta_size;
-+		enum object_type type;
 +
 +		if (!p->parent && !p->parent_is_ext)
 +			continue;
 +
 +		strategy_stat_attempted++;
 +
-+		if (p->parent_is_ext) {
++		if (p->parent_is_ext)
 +			SET_DELTA_EXT(p->child, &p->parent_oid);
-+			strategy_stat_accepted++;
-+			continue;
-+		}
++		else
++			SET_DELTA(p->child, p->parent);
 +
-+		trg_buf = repo_read_object_file(the_repository,
-+						&p->child->idx.oid,
-+						&type, &trg_size);
-+		if (!trg_buf)
-+			die(_("object %s cannot be read"),
-+			    oid_to_hex(&p->child->idx.oid));
-+
-+		src_buf = repo_read_object_file(the_repository,
-+						&p->parent->idx.oid,
-+						&type, &src_size);
-+		if (!src_buf)
-+			die(_("object %s cannot be read"),
-+			    oid_to_hex(&p->parent->idx.oid));
-+
-+		delta_buf = diff_delta(src_buf, src_size,
-+				       trg_buf, trg_size,
-+				       &delta_size, 0);
-+		free(trg_buf);
-+		free(src_buf);
-+
-+		if (!delta_buf) {
-+			warning(_("delta computation failed for %s -> %s"),
-+				oid_to_hex(&p->child->idx.oid),
-+				oid_to_hex(&p->parent->idx.oid));
-+			continue;
-+		}
-+		free(delta_buf);
-+
-+		SET_DELTA(p->child, p->parent);
-+		SET_DELTA_SIZE(p->child, delta_size);
 +		strategy_stat_accepted++;
 +	}
 +}
@@ -316,7 +304,7 @@ index 0fc0680b40..4666069100 100644
  static void prepare_pack(int window, int depth)
  {
  	struct object_entry **delta_list;
-@@ -3188,7 +3460,8 @@ static void prepare_pack(int window, int depth)
+@@ -3188,7 +3423,8 @@ static void prepare_pack(int window, int depth)
  	if (!pack_to_stdout)
  		do_check_packed_object_crc = 1;
 
@@ -326,7 +314,7 @@ index 0fc0680b40..4666069100 100644
  		return;
 
  	ALLOC_ARRAY(delta_list, to_pack.nr_objects);
-@@ -3197,11 +3470,13 @@ static void prepare_pack(int window, int depth)
+@@ -3197,11 +3433,13 @@ static void prepare_pack(int window, int depth)
  	for (i = 0; i < to_pack.nr_objects; i++) {
  		struct object_entry *entry = to_pack.objects + i;
 
@@ -342,7 +330,7 @@ index 0fc0680b40..4666069100 100644
 
  		if (!entry->type_valid ||
  		    oe_size_less_than(&to_pack, entry, 50))
-@@ -3228,7 +3503,10 @@ static void prepare_pack(int window, int depth)
+@@ -3228,7 +3466,10 @@ static void prepare_pack(int window, int depth)
  		delta_list[n++] = entry;
  	}
 
@@ -354,7 +342,7 @@ index 0fc0680b40..4666069100 100644
  		unsigned nr_done = 0;
 
  		if (progress)
-@@ -3239,7 +3517,12 @@ static void prepare_pack(int window, int depth)
+@@ -3239,7 +3480,12 @@ static void prepare_pack(int window, int depth)
  		stop_progress(&progress_state);
  		if (nr_done != nr_deltas)
  			die(_("inconsistency with delta count"));
@@ -367,7 +355,7 @@ index 0fc0680b40..4666069100 100644
  	free(delta_list);
  }
 
-@@ -4426,6 +4709,14 @@ int cmd_pack_objects(int argc,
+@@ -4426,6 +4672,14 @@ int cmd_pack_objects(int argc,
  			 N_("do not pack objects in promisor packfiles")),
  		OPT_BOOL(0, "delta-islands", &use_delta_islands,
  			 N_("respect islands during delta compression")),
