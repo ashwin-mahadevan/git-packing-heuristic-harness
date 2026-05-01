@@ -11,7 +11,7 @@ This harness extends `git pack-objects` with a `--delta-strategy=<cmd>` flag tha
 ## Quick start
 
 ```bash
-# Clone the repo (git source is included as a subtree)
+# Clone the repo
 git clone https://github.com/ashwin-mahadevan/git-packing-heuristic-harness.git
 cd git-packing-heuristic-harness
 
@@ -123,10 +123,6 @@ python3 harness/run.py --repo corpus/my-repo \
     --strategy "./my_strategy" \
     --label my-strategy
 
-# Heuristic-only reimplementation of the default (no delta oracle needed)
-python3 harness/run.py --repo corpus/my-repo \
-    --strategy "python3 strategies/builtin_v1.py" \
-    --label heuristic-approx
 ```
 
 Output:
@@ -173,7 +169,6 @@ python3 harness/verify.py --layer 5
 | `strategies/none.py` | Emits `NONE` for every object | Lower-bound bracket (no deltas) |
 | `strategies/replay.py` | Replays recorded `(child, parent)` pairs | Upper-bound bracket (exact match to default) |
 | `strategies/builtin.py` | Exact reimplementation of git's sort + window algorithm using the delta oracle | Reference baseline; byte-identical to default |
-| `strategies/builtin_v1.py` | Heuristic-only approximation (no delta computation) | Fast approximate baseline |
 
 ## Project layout
 
@@ -184,7 +179,7 @@ python3 harness/verify.py --layer 5
 ├── harness/
 │   ├── build.sh                  # idempotent: clones git, applies patch, builds
 │   ├── run.py                    # (strategy × repo) → pack size + stats
-│   ├── verify.py                 # 6-layer verification suite
+│   ├── verify.py                 # 5-layer verification suite
 │   └── setup-corpus.sh           # clones test repos into corpus/
 ├── helpers/
 │   ├── delta-oracle.c            # C helper for exact delta sizes (linked to libgit.a)
@@ -192,8 +187,7 @@ python3 harness/verify.py --layer 5
 ├── strategies/
 │   ├── none.py                   # no deltas
 │   ├── replay.py                 # replay recorded assignments
-│   ├── builtin.py                # exact default algorithm reimplementation
-│   └── builtin_v1.py             # heuristic approximation
+│   └── builtin.py                # exact default algorithm reimplementation
 ├── corpus/                       # test repos (not tracked)
 └── results/                      # run logs (not tracked)
 ```

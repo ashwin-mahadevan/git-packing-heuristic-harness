@@ -83,4 +83,4 @@ jobs:
           $pass
 
       - name: "Verify: full verification suite"
-        run: python3 harness/verify.py --layer 6
+        run: python3 harness/verify.py --layer 5

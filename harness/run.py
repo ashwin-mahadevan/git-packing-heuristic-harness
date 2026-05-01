@@ -14,7 +14,7 @@ import argparse
 import hashlib
 import json
 import os
-import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -83,25 +83,19 @@ def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
         pack_file = f"{pack_base}.pack"
         with open(pack_file, 'wb') as f:
             f.write(result.stdout)
-        idx_file = f"{pack_base}.idx"
 
         pack_size = os.path.getsize(pack_file)
         pack_hash = hashlib.sha1(result.stdout).hexdigest()
 
-        # Copy pack and idx to results dir for further analysis
+        # Copy pack to results dir for further analysis
         results_dir = os.path.join(HARNESS_ROOT, "results")
         os.makedirs(results_dir, exist_ok=True)
 
-        import shutil
         final_pack = os.path.join(results_dir, os.path.basename(pack_file))
-        final_idx = os.path.join(results_dir, os.path.basename(idx_file))
         shutil.copy2(pack_file, final_pack)
-        if os.path.exists(idx_file):
-            shutil.copy2(idx_file, final_idx)
 
         return {
             "pack_file": final_pack,
-            "idx_file": final_idx,
             "pack_size": pack_size,
             "elapsed": elapsed,
             "pack_hash": pack_hash,

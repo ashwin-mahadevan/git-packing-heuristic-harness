@@ -22,7 +22,7 @@ clone_if_missing() {
     local depth="${3:-}"
     local target="$CORPUS_DIR/$name"
 
-    if [ -d "$target/.git" ] || [ -d "$target" ] && git -C "$target" rev-parse --git-dir >/dev/null 2>&1; then
+    if [ -d "$target/.git" ] || { [ -d "$target" ] && git -C "$target" rev-parse --git-dir >/dev/null 2>&1; }; then
         echo "=== $name: already cloned ==="
         return
     fi

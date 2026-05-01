@@ -307,10 +307,7 @@ def layer5_corpus(corpus_dir):
         for layer_num, layer_fn in [(1, layer1_noop), (2, layer2_validity),
                                      (3, layer3_brackets), (4, layer4_determinism)]:
             try:
-                if layer_num == 2:
-                    passed, msg = layer_fn(repo_path)
-                else:
-                    passed, msg = layer_fn(repo_path)
+                passed, msg = layer_fn(repo_path)
             except Exception as e:
                 passed, msg = False, f"Exception: {e}"
 
@@ -329,7 +326,7 @@ def main():
     parser.add_argument("--layer", type=int, choices=[1, 2, 3, 4, 5],
                         help="Run specific layer (default: all)")
     parser.add_argument("--corpus", default=os.path.join(HARNESS_ROOT, "corpus"),
-                        help="Corpus directory for layer 6")
+                        help="Corpus directory for layer 5")
     args = parser.parse_args()
 
     layers = {
