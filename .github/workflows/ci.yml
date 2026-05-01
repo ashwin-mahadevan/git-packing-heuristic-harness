@@ -11,8 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install build dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y build-essential zlib1g-dev
@@ -54,18 +52,18 @@ jobs:
 
       - name: "Verify: builtin strategy is byte-identical to default"
         run: |
-          PATCHED_GIT="$(pwd)/git/git"
+          HARNESS_GIT="$(pwd)/git/git"
           STRATEGY="python3 $(pwd)/strategies/builtin.py"
           pass=true
 
           for repo in corpus/ci-small corpus/ci-deltas; do
             name=$(basename "$repo")
-            obj_list=$("$PATCHED_GIT" -C "$repo" rev-list --all --objects)
+            obj_list=$("$HARNESS_GIT" -C "$repo" rev-list --all --objects)
 
-            echo "$obj_list" | "$PATCHED_GIT" -C "$repo" pack-objects --stdout --threads=1 \
+            echo "$obj_list" | "$HARNESS_GIT" -C "$repo" pack-objects --stdout --threads=1 \
               > "/tmp/default-${name}.pack"
 
-            echo "$obj_list" | "$PATCHED_GIT" -C "$repo" pack-objects --stdout --threads=1 \
+            echo "$obj_list" | "$HARNESS_GIT" -C "$repo" pack-objects --stdout --threads=1 \
               --delta-strategy="$STRATEGY" \
               > "/tmp/builtin-${name}.pack"
 

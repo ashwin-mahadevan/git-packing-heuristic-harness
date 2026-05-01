@@ -4,23 +4,13 @@
 #
 # Usage: harness/build.sh
 #
-# Steps:
-#   1. Ensure git submodule is checked out.
-#   2. Build git with DEVELOPER=1.
-#
-# The binary ends up at git/bin-wrappers/git (usable in-tree)
-# or can be referenced as GIT_SRC/git.
+# Builds the git subtree (git/) and the delta-oracle helper.
+# The binary ends up at git/git.
 #
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GIT_SRC="$HARNESS_ROOT/git"
-
-echo "=== Checking git submodule ==="
-if [ ! -f "$GIT_SRC/Makefile" ]; then
-    echo "Git submodule not initialized. Running git submodule update..."
-    git -C "$HARNESS_ROOT" submodule update --init --recursive
-fi
 
 echo "=== Building git ==="
 make -C "$GIT_SRC" -j"$(nproc)" \

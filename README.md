@@ -11,8 +11,8 @@ This harness extends `git pack-objects` with a `--delta-strategy=<cmd>` flag tha
 ## Quick start
 
 ```bash
-# Clone with the vendored git submodule
-git clone --recurse-submodules https://github.com/ashwin-mahadevan/git-packing-heuristic-harness.git
+# Clone the repo (git source is included as a subtree)
+git clone https://github.com/ashwin-mahadevan/git-packing-heuristic-harness.git
 cd git-packing-heuristic-harness
 
 # Install build dependencies (Ubuntu/Debian)
@@ -179,7 +179,7 @@ python3 harness/verify.py --layer 6
 ## Project layout
 
 ```
-├── git/                          # git fork with delta-strategy support (based on v2.47.0)
+├── git/                          # git subtree with delta-strategy support (based on v2.47.0)
 ├── harness/
 │   ├── build.sh                  # idempotent: builds git + oracle
 │   ├── run.py                    # (strategy × repo) → pack size + stats
