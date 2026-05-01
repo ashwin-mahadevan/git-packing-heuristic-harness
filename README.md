@@ -6,7 +6,7 @@ A test harness for experimenting with alternative delta-selection strategies in 
 
 When git creates a packfile, it decides which objects to store as deltas of other objects. The default algorithm sorts candidates by `(type, name_hash, size)` and scans a sliding window, greedily picking the smallest delta for each object. This heuristic works well in practice but isn't necessarily optimal.
 
-This harness patches `git pack-objects` with a `--delta-strategy=<cmd>` flag that delegates parent selection to an external process. You implement the process — git handles everything else (delta computation, size budgets, depth limits, pack assembly).
+This harness extends `git pack-objects` with a `--delta-strategy=<cmd>` flag that delegates parent selection to an external process. You implement the process — git handles everything else (delta computation, pack assembly).
 
 ## Quick start
 
@@ -18,7 +18,7 @@ cd git-packing-heuristic-harness
 # Install build dependencies (Ubuntu/Debian)
 sudo apt-get install -y build-essential zlib1g-dev
 
-# Build the patched git + delta-oracle helper
+# Build git + delta-oracle helper
 bash harness/build.sh
 
 # Create a test repo in corpus/
@@ -35,6 +35,8 @@ python3 harness/run.py --repo corpus/my-repo --strategy "./my_strategy"         
 
 A strategy is any executable that reads object descriptors from stdin and writes parent assignments to stdout. It can be written in any language.
 
+**Important:** Your strategy is invoked once per object type (commit, tree, blob, tag). All objects in a single invocation share the same type, so cross-type delta assignments are impossible by construction. Git trusts your assignments directly — it will not second-guess your parent choices with size budgets or depth limits. If you assign a bad parent, the resulting pack gets bigger; that's your signal to improve.
+
 ### Input (git writes to your stdin)
 
 One line per candidate object, terminated by a blank line:
@@ -46,7 +48,7 @@ One line per candidate object, terminated by a blank line:
 | Field | Description |
 |-------|-------------|
 | `oid` | Hex object ID (SHA-1) |
-| `type` | `commit`, `tree`, `blob`, or `tag` |
+| `type` | `commit`, `tree`, `blob`, or `tag` (same for all objects in a batch) |
 | `size` | Object size in bytes (decimal) |
 | `name_hash` | `pack_name_hash` as 8-digit hex — objects with the same filename get the same hash |
 | `preferred_base` | `1` if this object is only available as a potential base (don't assign it as a child), `0` otherwise |
@@ -63,6 +65,7 @@ One line per non-preferred-base object you received, terminated by a blank line:
 - Emit exactly one line for each input object where `preferred_base` is `0`.
 - `NONE` means "store this object in full" (no delta).
 - `parent_oid` must be the OID of another object from the input list (or a thin-pack-eligible external base).
+- Your assignments must not contain cycles. Depth is your responsibility — chains deeper than `--depth` (default 50) will be written as-is.
 
 ### Minimal example (Python)
 
@@ -133,10 +136,7 @@ Output:
   Elapsed:  2.31s
   Stats:
     delta-strategy/proposed: 4200
-    delta-strategy/accepted: 3800
-    delta-strategy/rejected-size: 400
-    delta-strategy/rejected-depth: 0
-    delta-strategy/rejected-cycle: 0
+    delta-strategy/accepted: 4200
 ============================================================
 ```
 
@@ -160,11 +160,11 @@ python3 harness/verify.py --layer 6
 
 | Layer | What it checks |
 |-------|---------------|
-| 1 | Patched git without `--delta-strategy` produces packs identical to stock git |
+| 1 | Harness git without `--delta-strategy` produces packs identical to stock git |
 | 2 | Pack validity: `index-pack`, `verify-pack`, `fsck`, object-list diff |
 | 3 | Bracket tests: `none` strategy matches `--window=0`; `replay` matches default |
 | 4 | Determinism: 3 consecutive runs produce byte-identical packs |
-| 5 | Stat reconciliation: `proposed - rejected == accepted` |
+| 5 | Stat reconciliation: `proposed == accepted` |
 | 6 | Corpus sweep: layers 1-5 across all repos in `corpus/` |
 
 ## Included strategies
@@ -179,11 +179,9 @@ python3 harness/verify.py --layer 6
 ## Project layout
 
 ```
-├── git/                          # vendored git submodule (v2.47.0)
-├── patches/
-│   └── apply-delta-strategy.sh   # applies --delta-strategy patch to git source
+├── git/                          # git fork with delta-strategy support (based on v2.47.0)
 ├── harness/
-│   ├── build.sh                  # idempotent: applies patch, builds git + oracle
+│   ├── build.sh                  # idempotent: builds git + oracle
 │   ├── run.py                    # (strategy × repo) → pack size + stats
 │   ├── verify.py                 # 6-layer verification suite
 │   └── setup-corpus.sh           # clones test repos into corpus/
@@ -199,11 +197,11 @@ python3 harness/verify.py --layer 6
 └── results/                      # run logs (not tracked)
 ```
 
-## How the patch works
+## How the delta-strategy extension works
 
-The patch adds three flags to `git pack-objects`:
+The git fork adds three flags to `git pack-objects`:
 
-- **`--delta-strategy=<cmd>`** — replaces the sort + `ll_find_deltas` block in `prepare_pack()` with a subprocess protocol. Git builds the candidate list as usual, streams descriptors to `<cmd>`, reads back `(child, parent)` assignments, sorts them topologically, and applies each via `try_delta()`. Pairs that delta poorly are silently dropped (the object is stored in full).
+- **`--delta-strategy=<cmd>`** — replaces the sort + `ll_find_deltas` block in `prepare_pack()` with a subprocess protocol. Git groups candidates by object type, invokes `<cmd>` once per type, streams descriptors, reads back `(child, parent)` assignments, sorts them topologically, and applies them directly. Git trusts the strategy's choices — no size-budget or depth filtering is applied.
 
 - **`--record-strategy=<file>`** — after a normal delta-finding run, dumps the `(child, parent)` pairs that were actually selected. Used by `strategies/replay.py` for fidelity testing.
 

@@ -21,7 +21,7 @@ import tempfile
 import time
 
 HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PATCHED_GIT = os.path.join(HARNESS_ROOT, "git", "git")
+HARNESS_GIT = os.path.join(HARNESS_ROOT, "git", "git")
 
 
 def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
@@ -41,14 +41,14 @@ def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,
 
         # Get all objects in the repo
         rev_list = subprocess.run(
-            [PATCHED_GIT, "-C", repo_path, "rev-list", "--all", "--objects"],
+            [HARNESS_GIT, "-C", repo_path, "rev-list", "--all", "--objects"],
             capture_output=True, text=True, check=True
         )
         object_list = rev_list.stdout
 
         # Build pack-objects command
         cmd = [
-            PATCHED_GIT, "-C", repo_path,
+            HARNESS_GIT, "-C", repo_path,
             "pack-objects",
             "--threads=1",
             "--stdout",
@@ -155,8 +155,8 @@ def main():
         print(f"Repo not found: {args.repo}", file=sys.stderr)
         sys.exit(1)
 
-    if not os.path.exists(PATCHED_GIT):
-        print(f"Patched git not found at {PATCHED_GIT}. Run harness/build.sh first.",
+    if not os.path.exists(HARNESS_GIT):
+        print(f"Harness git not found at {HARNESS_GIT}. Run harness/build.sh first.",
               file=sys.stderr)
         sys.exit(1)
 

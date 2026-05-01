@@ -24,7 +24,7 @@ import tempfile
 import time
 
 HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PATCHED_GIT = os.path.join(HARNESS_ROOT, "git", "git")
+HARNESS_GIT = os.path.join(HARNESS_ROOT, "git", "git")
 STOCK_GIT = shutil.which("git")
 
 
@@ -74,9 +74,9 @@ def pack_objects(git_bin, repo_path, pack_base, object_list,
 
 
 def layer1_noop(repo_path):
-    """Patched git without --delta-strategy produces byte-identical pack to stock git."""
+    """Harness git without --delta-strategy produces byte-identical pack to stock git."""
     with tempfile.TemporaryDirectory(prefix="verify-l1-") as tmpdir:
-        obj_list = get_object_list(PATCHED_GIT, repo_path)
+        obj_list = get_object_list(HARNESS_GIT, repo_path)
 
         stock_base = os.path.join(tmpdir, "stock")
         patched_base = os.path.join(tmpdir, "patched")
@@ -85,9 +85,9 @@ def layer1_noop(repo_path):
         if err:
             return False, f"Stock git pack-objects failed: {err}"
 
-        patched_hash, err = pack_objects(PATCHED_GIT, repo_path, patched_base, obj_list)
+        patched_hash, err = pack_objects(HARNESS_GIT, repo_path, patched_base, obj_list)
         if err:
-            return False, f"Patched git pack-objects failed: {err}"
+            return False, f"Harness git pack-objects failed: {err}"
 
         stock_pack = f"{stock_base}.pack"
         patched_pack = f"{patched_base}.pack"
@@ -108,12 +108,12 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
     """Verify pack validity: index-pack, verify-pack, fsck, clone, object diff."""
     with tempfile.TemporaryDirectory(prefix="verify-l2-") as tmpdir:
         if pack_file is None:
-            obj_list = get_object_list(PATCHED_GIT, repo_path)
+            obj_list = get_object_list(HARNESS_GIT, repo_path)
             pack_base = os.path.join(tmpdir, "test")
             extra = []
             if strategy_cmd:
                 extra.append(f"--delta-strategy={strategy_cmd}")
-            pack_hash, err = pack_objects(PATCHED_GIT, repo_path, pack_base,
+            pack_hash, err = pack_objects(HARNESS_GIT, repo_path, pack_base,
                                           obj_list, extra_args=extra)
             if err:
                 return False, f"pack-objects failed: {err}"
@@ -121,7 +121,7 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
 
         # git index-pack
         idx_result = subprocess.run(
-            [PATCHED_GIT, "index-pack", pack_file],
+            [HARNESS_GIT, "index-pack", pack_file],
             capture_output=True, text=True,
         )
         if idx_result.returncode != 0:
@@ -129,7 +129,7 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
 
         # git verify-pack -v
         verify_result = subprocess.run(
-            [PATCHED_GIT, "verify-pack", "-v", pack_file],
+            [HARNESS_GIT, "verify-pack", "-v", pack_file],
             capture_output=True, text=True,
         )
         if verify_result.returncode != 0:
@@ -139,7 +139,7 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
         test_repo = os.path.join(tmpdir, "from-pack")
         os.makedirs(os.path.join(test_repo, ".git", "objects", "pack"), exist_ok=True)
         subprocess.run(
-            [PATCHED_GIT, "init", "--bare", test_repo],
+            [HARNESS_GIT, "init", "--bare", test_repo],
             capture_output=True, check=True,
         )
 
@@ -150,14 +150,14 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
             shutil.copy2(idx_file, pack_dest)
         else:
             subprocess.run(
-                [PATCHED_GIT, "index-pack",
+                [HARNESS_GIT, "index-pack",
                  os.path.join(pack_dest, os.path.basename(pack_file))],
                 capture_output=True, check=True,
             )
 
         # git fsck
         fsck_result = subprocess.run(
-            [PATCHED_GIT, "-C", test_repo, "fsck"],
+            [HARNESS_GIT, "-C", test_repo, "fsck"],
             capture_output=True, text=True,
         )
         if fsck_result.returncode != 0:
@@ -165,14 +165,14 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
 
         # Compare object lists
         source_objs = subprocess.run(
-            [PATCHED_GIT, "-C", repo_path, "rev-list", "--all", "--objects"],
+            [HARNESS_GIT, "-C", repo_path, "rev-list", "--all", "--objects"],
             capture_output=True, text=True, check=True,
         ).stdout
         source_set = set(line.split()[0] for line in source_objs.strip().split('\n') if line.strip())
 
         # We need refs in the test repo. Transfer refs from source.
         refs_result = subprocess.run(
-            [PATCHED_GIT, "-C", repo_path, "show-ref"],
+            [HARNESS_GIT, "-C", repo_path, "show-ref"],
             capture_output=True, text=True,
         )
         if refs_result.returncode == 0:
@@ -181,12 +181,12 @@ def layer2_validity(repo_path, pack_file=None, strategy_cmd=None):
                     continue
                 oid, refname = ref_line.split(None, 1)
                 subprocess.run(
-                    [PATCHED_GIT, "-C", test_repo, "update-ref", refname, oid],
+                    [HARNESS_GIT, "-C", test_repo, "update-ref", refname, oid],
                     capture_output=True,
                 )
 
         test_objs = subprocess.run(
-            [PATCHED_GIT, "-C", test_repo, "rev-list", "--all", "--objects"],
+            [HARNESS_GIT, "-C", test_repo, "rev-list", "--all", "--objects"],
             capture_output=True, text=True,
         ).stdout
         test_set = set(line.split()[0] for line in test_objs.strip().split('\n') if line.strip())
@@ -204,19 +204,19 @@ def layer3_brackets(repo_path):
     results = []
 
     with tempfile.TemporaryDirectory(prefix="verify-l3-") as tmpdir:
-        obj_list = get_object_list(PATCHED_GIT, repo_path)
+        obj_list = get_object_list(HARNESS_GIT, repo_path)
 
         # --- none strategy vs window=0 ---
         none_base = os.path.join(tmpdir, "none")
         none_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'none.py')}"
-        none_hash, err = pack_objects(PATCHED_GIT, repo_path, none_base,
+        none_hash, err = pack_objects(HARNESS_GIT, repo_path, none_base,
                                        obj_list,
                                        extra_args=[f"--delta-strategy={none_strategy}"])
         if err:
             return False, f"none strategy pack-objects failed: {err}"
 
         w0_base = os.path.join(tmpdir, "window0")
-        w0_hash, err = pack_objects(PATCHED_GIT, repo_path, w0_base,
+        w0_hash, err = pack_objects(HARNESS_GIT, repo_path, w0_base,
                                      obj_list,
                                      extra_args=["--window=0"])
         if err:
@@ -234,7 +234,7 @@ def layer3_brackets(repo_path):
         # First, run default with --record-strategy
         record_file = os.path.join(tmpdir, "default.record")
         default_base = os.path.join(tmpdir, "default")
-        default_hash, err = pack_objects(PATCHED_GIT, repo_path, default_base,
+        default_hash, err = pack_objects(HARNESS_GIT, repo_path, default_base,
                                           obj_list,
                                           extra_args=[f"--record-strategy={record_file}"])
         if err:
@@ -243,7 +243,7 @@ def layer3_brackets(repo_path):
         # Then, run replay with those recorded pairs
         replay_base = os.path.join(tmpdir, "replay")
         replay_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'replay.py')} {record_file}"
-        replay_hash, err = pack_objects(PATCHED_GIT, repo_path, replay_base,
+        replay_hash, err = pack_objects(HARNESS_GIT, repo_path, replay_base,
                                          obj_list,
                                          extra_args=[f"--delta-strategy={replay_strategy}"])
         if err:
@@ -264,7 +264,7 @@ def layer3_brackets(repo_path):
 def layer4_determinism(repo_path, strategy_cmd=None):
     """3x back-to-back packs must be byte-identical."""
     with tempfile.TemporaryDirectory(prefix="verify-l4-") as tmpdir:
-        obj_list = get_object_list(PATCHED_GIT, repo_path)
+        obj_list = get_object_list(HARNESS_GIT, repo_path)
         hashes = []
 
         for run in range(3):
@@ -272,7 +272,7 @@ def layer4_determinism(repo_path, strategy_cmd=None):
             extra = []
             if strategy_cmd:
                 extra.append(f"--delta-strategy={strategy_cmd}")
-            pack_hash, err = pack_objects(PATCHED_GIT, repo_path, base,
+            pack_hash, err = pack_objects(HARNESS_GIT, repo_path, base,
                                            obj_list, extra_args=extra)
             if err:
                 return False, f"Run {run} failed: {err}"
@@ -308,18 +308,13 @@ def _parse_strategy_trace2(trace2_file):
 def _check_stat_identity(stats, label):
     proposed = stats.get("proposed", 0)
     accepted = stats.get("accepted", 0)
-    rejected_size = stats.get("rejected-size", 0)
-    rejected_depth = stats.get("rejected-depth", 0)
-    rejected_cycle = stats.get("rejected-cycle", 0)
-    rejected_total = rejected_size + rejected_depth + rejected_cycle
 
     issues = []
-    if proposed - rejected_total != accepted:
+    if proposed != accepted:
         issues.append(
-            f"{label}: proposed({proposed}) - rejected({rejected_total}) "
-            f"!= accepted({accepted})"
+            f"{label}: proposed({proposed}) != accepted({accepted})"
         )
-    return issues, proposed, accepted, rejected_total
+    return issues, proposed, accepted
 
 
 def layer5_stats(repo_path):
@@ -327,14 +322,14 @@ def layer5_stats(repo_path):
     issues = []
 
     with tempfile.TemporaryDirectory(prefix="verify-l5-") as tmpdir:
-        obj_list = get_object_list(PATCHED_GIT, repo_path)
+        obj_list = get_object_list(HARNESS_GIT, repo_path)
 
         # --- Test with none strategy (should have 0 proposed, 0 accepted) ---
         trace2_none = os.path.join(tmpdir, "trace2-none.json")
         none_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'none.py')}"
         base = os.path.join(tmpdir, "stats-none")
         _, err = pack_objects(
-            PATCHED_GIT, repo_path, base, obj_list,
+            HARNESS_GIT, repo_path, base, obj_list,
             extra_args=[f"--delta-strategy={none_strategy}"],
             env_extra={"GIT_TRACE2_EVENT": trace2_none},
         )
@@ -347,14 +342,14 @@ def layer5_stats(repo_path):
 
         if stats_none.get("accepted", 0) != 0:
             issues.append(f"none: accepted={stats_none['accepted']}, expected 0")
-        i, _, _, _ = _check_stat_identity(stats_none, "none")
+        i, _, _ = _check_stat_identity(stats_none, "none")
         issues.extend(i)
 
         # --- Test with replay strategy (should have actual deltas) ---
         record_file = os.path.join(tmpdir, "default.record")
         base_default = os.path.join(tmpdir, "default")
         _, err = pack_objects(
-            PATCHED_GIT, repo_path, base_default, obj_list,
+            HARNESS_GIT, repo_path, base_default, obj_list,
             extra_args=[f"--record-strategy={record_file}"],
         )
         if err:
@@ -364,7 +359,7 @@ def layer5_stats(repo_path):
         replay_strategy = f"python3 {os.path.join(HARNESS_ROOT, 'strategies', 'replay.py')} {record_file}"
         base_replay = os.path.join(tmpdir, "stats-replay")
         _, err = pack_objects(
-            PATCHED_GIT, repo_path, base_replay, obj_list,
+            HARNESS_GIT, repo_path, base_replay, obj_list,
             extra_args=[f"--delta-strategy={replay_strategy}"],
             env_extra={"GIT_TRACE2_EVENT": trace2_replay},
         )
@@ -375,15 +370,14 @@ def layer5_stats(repo_path):
         if not stats_replay:
             return False, "No trace2 stats from replay strategy"
 
-        i, proposed, accepted, rejected = _check_stat_identity(stats_replay, "replay")
+        i, proposed, accepted = _check_stat_identity(stats_replay, "replay")
         issues.extend(i)
 
         if issues:
             return False, "; ".join(issues)
 
-        return True, (f"Stats consistent: none=[0/0/0], "
-                      f"replay=[proposed={proposed}, accepted={accepted}, "
-                      f"rejected={rejected}]")
+        return True, (f"Stats consistent: none=[0/0], "
+                      f"replay=[proposed={proposed}, accepted={accepted}]")
 
 
 def layer6_corpus(corpus_dir):

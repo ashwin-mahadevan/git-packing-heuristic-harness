@@ -1,22 +1,20 @@
 #!/bin/bash
 #
-# Idempotent build script for the patched git.
+# Idempotent build script.
 #
 # Usage: harness/build.sh
 #
 # Steps:
-#   1. Ensure git submodule is checked out at the pinned tag.
-#   2. Apply the delta-strategy patch (idempotent).
-#   3. Build git with DEVELOPER=1.
+#   1. Ensure git submodule is checked out.
+#   2. Build git with DEVELOPER=1.
 #
-# The patched binary ends up at git/bin-wrappers/git (usable in-tree)
+# The binary ends up at git/bin-wrappers/git (usable in-tree)
 # or can be referenced as GIT_SRC/git.
 #
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GIT_SRC="$HARNESS_ROOT/git"
-PATCH_SCRIPT="$HARNESS_ROOT/patches/apply-delta-strategy.sh"
 
 echo "=== Checking git submodule ==="
 if [ ! -f "$GIT_SRC/Makefile" ]; then
@@ -24,10 +22,7 @@ if [ ! -f "$GIT_SRC/Makefile" ]; then
     git -C "$HARNESS_ROOT" submodule update --init --recursive
 fi
 
-echo "=== Applying delta-strategy patch ==="
-bash "$PATCH_SCRIPT" "$GIT_SRC"
-
-echo "=== Building patched git ==="
+echo "=== Building git ==="
 make -C "$GIT_SRC" -j"$(nproc)" \
     DEVELOPER=1 \
     NO_OPENSSL=1 \
@@ -58,6 +53,6 @@ rm -f "$GIT_SRC/.build-oracle.mak"
 
 echo ""
 echo "=== Build complete ==="
-echo "Patched git binary: $GIT_SRC/git"
+echo "Git binary:         $GIT_SRC/git"
 echo "Delta oracle:       $HARNESS_ROOT/helpers/delta-oracle"
 "$GIT_SRC/git" --version
