@@ -40,21 +40,21 @@ make -C "$GIT_SRC" -j"$(nproc)" \
     2>&1 | tail -5
 
 echo "=== Building delta-oracle helper ==="
-CFLAGS_FILE="$GIT_SRC/.cflags-for-oracle"
-# Extract the BASIC_CFLAGS that git's Makefile computed
-make -C "$GIT_SRC" -n -p NO_OPENSSL=1 NO_CURL=1 NO_EXPAT=1 NO_GETTEXT=1 NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 2>/dev/null \
-    | grep '^BASIC_CFLAGS =' | head -1 | sed 's/^BASIC_CFLAGS = //' > "$CFLAGS_FILE"
-
-BASIC_CFLAGS=$(cat "$CFLAGS_FILE")
-cc -g -O2 $BASIC_CFLAGS \
-    -o "$HARNESS_ROOT/helpers/delta-oracle" \
-    "$HARNESS_ROOT/helpers/delta-oracle.c" \
-    "$GIT_SRC/common-main.o" \
-    "$GIT_SRC/libgit.a" \
-    "$GIT_SRC/xdiff/lib.a" \
-    "$GIT_SRC/reftable/libreftable.a" \
-    -lz -lpthread -lrt 2>&1 | tail -5
-rm -f "$CFLAGS_FILE"
+# Compile the oracle by having git's Makefile do a one-off compilation.
+# This reuses the exact CFLAGS/LDFLAGS that git itself was built with.
+cat > "$GIT_SRC/.build-oracle.mak" <<'ORACLE_MAK'
+include Makefile
+delta-oracle: $(HARNESS_ROOT)/helpers/delta-oracle.c common-main.o libgit.a xdiff/lib.a reftable/libreftable.a
+	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $(HARNESS_ROOT)/helpers/delta-oracle \
+		$(HARNESS_ROOT)/helpers/delta-oracle.c \
+		common-main.o libgit.a xdiff/lib.a reftable/libreftable.a \
+		$(LIBS) $(EXTLIBS)
+ORACLE_MAK
+make -C "$GIT_SRC" -f .build-oracle.mak delta-oracle \
+    HARNESS_ROOT="$HARNESS_ROOT" \
+    NO_OPENSSL=1 NO_CURL=1 NO_EXPAT=1 NO_GETTEXT=1 NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 \
+    2>&1 | tail -5
+rm -f "$GIT_SRC/.build-oracle.mak"
 
 echo ""
 echo "=== Build complete ==="

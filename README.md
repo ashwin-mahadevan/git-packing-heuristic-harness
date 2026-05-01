@@ -12,7 +12,7 @@ This harness patches `git pack-objects` with a `--delta-strategy=<cmd>` flag tha
 
 ```bash
 # Clone with the vendored git submodule
-git clone --recurse-submodules https://github.com/<owner>/git-packing-heuristic-harness.git
+git clone --recurse-submodules https://github.com/ashwin-mahadevan/git-packing-heuristic-harness.git
 cd git-packing-heuristic-harness
 
 # Install build dependencies (Ubuntu/Debian)
