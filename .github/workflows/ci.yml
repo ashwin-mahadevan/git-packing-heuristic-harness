@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y build-essential zlib1g-dev
+
+      - name: Build patched git and delta-oracle
+        run: bash harness/build.sh
+
+      - name: Create test repos
+        run: |
+          mkdir -p corpus/ci-small
+          cd corpus/ci-small
+          git init
+          git config user.email "ci@test"
+          git config user.name "CI"
+          for i in $(seq 1 20); do
+            dd if=/dev/urandom bs=100 count=1 2>/dev/null | base64 > "file${i}.txt"
+            git add "file${i}.txt"
+            git commit -m "add file${i}" -q
+          done
+
+          cd ..
+          mkdir -p ci-deltas
+          cd ci-deltas
+          git init
+          git config user.email "ci@test"
+          git config user.name "CI"
+          for i in $(seq 1 30); do
+            python3 -c "
+          import random, string
+          base = ''.join(random.choices(string.ascii_letters, k=500))
+          for v in range(3):
+              content = base[:v*50] + ''.join(random.choices(string.ascii_letters, k=50)) + base[(v+1)*50:]
+              with open(f'file{v}.txt', 'w') as f:
+                  f.write(content)
+          "
+            git add .
+            git commit -m "batch $i" -q
+          done
+
+      - name: "Verify: builtin strategy is byte-identical to default"
+        run: |
+          PATCHED_GIT="$(pwd)/git/git"
+          STRATEGY="python3 $(pwd)/strategies/builtin.py"
+          pass=true
+
+          for repo in corpus/ci-small corpus/ci-deltas; do
+            name=$(basename "$repo")
+            obj_list=$("$PATCHED_GIT" -C "$repo" rev-list --all --objects)
+
+            echo "$obj_list" | "$PATCHED_GIT" -C "$repo" pack-objects --stdout --threads=1 \
+              > "/tmp/default-${name}.pack"
+
+            echo "$obj_list" | "$PATCHED_GIT" -C "$repo" pack-objects --stdout --threads=1 \
+              --delta-strategy="$STRATEGY" \
+              > "/tmp/builtin-${name}.pack"
+
+            default_sha=$(sha256sum "/tmp/default-${name}.pack" | cut -d' ' -f1)
+            builtin_sha=$(sha256sum "/tmp/builtin-${name}.pack" | cut -d' ' -f1)
+
+            if [ "$default_sha" = "$builtin_sha" ]; then
+              echo "PASS [$name]: byte-identical ($(wc -c < /tmp/default-${name}.pack) bytes)"
+            else
+              echo "FAIL [$name]: default=$default_sha builtin=$builtin_sha"
+              echo "  default: $(wc -c < /tmp/default-${name}.pack) bytes"
+              echo "  builtin: $(wc -c < /tmp/builtin-${name}.pack) bytes"
+              pass=false
+            fi
+          done
+
+          $pass
+
+      - name: "Verify: full verification suite"
+        run: python3 harness/verify.py --layer 6
