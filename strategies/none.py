@@ -15,14 +15,16 @@ def main():
         if not line:
             break
         parts = line.split()
-        oid = parts[0]
-        preferred_base = int(parts[4])
+        if parts[0] != 'D':
+            sys.exit(f"unexpected line: {line}")
+        oid = parts[1]
+        preferred_base = int(parts[5])
         descriptors.append((oid, preferred_base))
 
     for oid, preferred_base in descriptors:
         if preferred_base:
             continue
-        sys.stdout.write(f"{oid} NONE\n")
+        sys.stdout.write(f"A {oid} NONE\n")
 
     sys.stdout.write("\n")
     sys.stdout.flush()

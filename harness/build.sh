@@ -35,23 +35,7 @@ make -C "$GIT_SRC" -j"$(nproc)" \
     NO_TCLTK=1 \
     2>&1 | tail -5
 
-echo "=== Building delta-oracle helper ==="
-cat > "$GIT_SRC/.build-oracle.mak" <<'ORACLE_MAK'
-include Makefile
-delta-oracle: $(HARNESS_ROOT)/helpers/delta-oracle.c common-main.o libgit.a xdiff/lib.a reftable/libreftable.a
-	$(QUIET_LINK)$(CC) $(ALL_CFLAGS) -o $(HARNESS_ROOT)/helpers/delta-oracle \
-		$(HARNESS_ROOT)/helpers/delta-oracle.c \
-		common-main.o libgit.a xdiff/lib.a reftable/libreftable.a \
-		$(LIBS) $(EXTLIBS)
-ORACLE_MAK
-make -C "$GIT_SRC" -f .build-oracle.mak delta-oracle \
-    HARNESS_ROOT="$HARNESS_ROOT" \
-    NO_OPENSSL=1 NO_CURL=1 NO_EXPAT=1 NO_GETTEXT=1 NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 \
-    2>&1 | tail -5
-rm -f "$GIT_SRC/.build-oracle.mak"
-
 echo ""
 echo "=== Build complete ==="
 echo "Git binary:         $GIT_SRC/git"
-echo "Delta oracle:       $HARNESS_ROOT/helpers/delta-oracle"
 "$GIT_SRC/git" --version

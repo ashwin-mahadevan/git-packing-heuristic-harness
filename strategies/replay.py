@@ -19,7 +19,6 @@ def main():
 
     record_file = sys.argv[1]
 
-    # Load recorded assignments
     recorded = {}
     with open(record_file, 'r') as f:
         for line in f:
@@ -31,23 +30,23 @@ def main():
             parent_oid = parts[1]
             recorded[child_oid] = parent_oid
 
-    # Read descriptors from stdin (consume until blank line)
     descriptors = []
     for line in sys.stdin:
         line = line.rstrip('\n')
         if not line:
             break
         parts = line.split()
-        oid = parts[0]
-        preferred_base = int(parts[4])
+        if parts[0] != 'D':
+            sys.exit(f"unexpected line: {line}")
+        oid = parts[1]
+        preferred_base = int(parts[5])
         descriptors.append((oid, preferred_base))
 
-    # Emit assignments
     for oid, preferred_base in descriptors:
         if preferred_base:
             continue
         parent = recorded.get(oid, "NONE")
-        sys.stdout.write(f"{oid} {parent}\n")
+        sys.stdout.write(f"A {oid} {parent}\n")
 
     sys.stdout.write("\n")
     sys.stdout.flush()

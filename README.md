@@ -11,14 +11,12 @@ This harness extends `git pack-objects` with a `--delta-strategy=<cmd>` flag tha
 ## Quick start
 
 ```bash
-# Clone the repo
 git clone https://github.com/ashwin-mahadevan/git-packing-heuristic-harness.git
 cd git-packing-heuristic-harness
 
 # Install build dependencies (Ubuntu/Debian)
 sudo apt-get install -y build-essential zlib1g-dev
 
-# Build git + delta-oracle helper
 bash harness/build.sh
 
 # Create a test repo in corpus/
@@ -33,42 +31,46 @@ python3 harness/run.py --repo corpus/my-repo --strategy "./my_strategy"         
 
 ## Writing a strategy
 
-A strategy is any executable that reads object descriptors from stdin and writes parent assignments to stdout. It can be written in any language.
+A strategy is any executable that exchanges tagged line-oriented messages with the harness over stdin/stdout. The harness invokes it once per pack, with all candidate objects mixed together regardless of type. Git applies your assignments verbatim — no size-budget, depth, or type filtering. If you assign a bad parent, the resulting pack gets bigger or invalid; that's your signal to improve.
 
-**Important:** Your strategy is invoked once per object type (commit, tree, blob, tag). All objects in a single invocation share the same type, so cross-type delta assignments are impossible by construction. Git trusts your assignments directly — it will not second-guess your parent choices with size budgets or depth limits. If you assign a bad parent, the resulting pack gets bigger; that's your signal to improve.
+### Protocol
 
-**Protocol requirements:** Your strategy must read all of stdin before writing any output. Git writes all descriptors and closes stdin before reading your stdout — a strategy that writes before consuming all input will deadlock on large repos.
+**Stdin** (harness → strategy), one message per line:
 
-### Input (git writes to your stdin)
+| Tag | Format | Meaning |
+|-----|--------|---------|
+| `D` | `D <oid> <type> <size> <name_hash> <preferred_base> <reused_base\|NONE>` | Candidate descriptor |
+| `R` | `R <child_oid> <parent_oid> [<size>]` | Response to a `Q` query |
+| (blank) | empty line | End of `D` lines (no more descriptors will arrive) |
 
-One line per candidate object, terminated by a blank line:
+**Stdout** (strategy → harness), one message per line:
 
-```
-<oid> <type> <size> <name_hash> <preferred_base> <reused_delta_base_or_NONE>
-```
+| Tag | Format | Meaning |
+|-----|--------|---------|
+| `Q` | `Q <child_oid> <parent_oid> <max_size>` | Ask for the delta size of `child` against `parent` (with budget `max_size`; `0` = unlimited) |
+| `A` | `A <child_oid> <parent_oid\|NONE>` | Final assignment for one non-preferred-base entry |
+| (blank) | empty line | Strategy is done; no more `Q` or `A` |
+
+#### Descriptor fields
 
 | Field | Description |
 |-------|-------------|
 | `oid` | Hex object ID (SHA-1) |
-| `type` | `commit`, `tree`, `blob`, or `tag` (same for all objects in a batch) |
+| `type` | `commit`, `tree`, `blob`, or `tag` |
 | `size` | Object size in bytes (decimal) |
 | `name_hash` | `pack_name_hash` as 8-digit hex — objects with the same filename get the same hash |
 | `preferred_base` | `1` if this object is only available as a potential base (don't assign it as a child), `0` otherwise |
-| `reused_delta_base_or_NONE` | If a reused on-disk delta already exists, its base OID; else `NONE` |
+| `reused_base_or_NONE` | If a reused on-disk delta already exists, its base OID; else `NONE` |
 
-### Output (you write to stdout)
+#### Ordering and obligations
 
-One line per non-preferred-base object you received, terminated by a blank line:
-
-```
-<child_oid> <parent_oid_or_NONE>
-```
-
-- Emit exactly one line for each input object where `preferred_base` is `0`.
-- Each `child_oid` must appear at most once. If duplicated, only the last assignment takes effect.
-- `NONE` means "store this object in full" (no delta).
-- `parent_oid` must be the OID of another object from the input list (or a thin-pack-eligible external base).
+- All `D` lines precede any `R` line on stdin. Within those groups, the harness does **not** guarantee that `R` responses arrive in the same order as the `Q` queries that produced them. Match them by the `<child_oid> <parent_oid>` pair embedded in each `R`.
+- A successful `R` includes the delta size as the third field; a failed query (delta too big for the supplied `max_size`, or `diff_delta` failed) omits the size field.
+- Emit exactly one `A` line per non-preferred-base descriptor. `A <child> NONE` means "store this object in full". A non-`NONE` parent must be the OID of another object from the input list (or a thin-pack-eligible external base).
+- Each `child_oid` should appear in at most one `A` line. If duplicated, only the last assignment takes effect.
 - Your assignments must not contain cycles. Depth is your responsibility — chains deeper than `--depth` (default 50) will be written as-is.
+- Flush stdout after each `Q`. Python's `sys.stdout` is block-buffered when piped — without an explicit `flush()`, the harness never sees the query and you deadlock.
+- Keep reading stdin while waiting for an `R`. The harness writes descriptors and `R` responses on the same pipe; if you stop reading, descriptor writes back up and the harness can stall.
 
 ### Minimal example (Python)
 
@@ -82,16 +84,37 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         break
-    parts = line.split()
-    entries.append((parts[0], int(parts[4])))  # oid, preferred_base
+    parts = line.split()  # parts[0] is "D"
+    oid = parts[1]
+    preferred_base = int(parts[5])
+    entries.append((oid, preferred_base))
 
 for oid, preferred_base in entries:
-    if not preferred_base:
-        sys.stdout.write(f"{oid} NONE\n")
+    if preferred_base:
+        continue
+    sys.stdout.write(f"A {oid} NONE\n")
 
 sys.stdout.write("\n")
 sys.stdout.flush()
 ```
+
+### Querying delta sizes
+
+Strategies that want to compare candidate parents by delta size can ask the harness:
+
+```python
+def query_delta(trg_oid, src_oid, max_size=0):
+    sys.stdout.write(f"Q {trg_oid} {src_oid} {max_size}\n")
+    sys.stdout.flush()
+    parts = sys.stdin.readline().split()
+    # parts: ["R", child, parent] or ["R", child, parent, size]
+    assert parts[0] == "R" and parts[1] == trg_oid and parts[2] == src_oid
+    return int(parts[3]) if len(parts) > 3 else 0
+```
+
+`max_size` of `0` always returns the actual delta size. A positive `max_size` lets `diff_delta` bail early — useful for replicating git's default algorithm exactly, which uses a per-iteration size budget. (Note: `diff_delta` with a budget can refuse a delta whose final size would have fit, because the budget check trips on transient overshoot during emission. With `max_size=0` you always get the exact size.)
+
+The harness caches each computed delta on the entry — if your final `A` line picks the smallest parent you queried for that child, the pack-write step reuses the cached delta instead of recomputing.
 
 ### Reading object content
 
@@ -112,7 +135,7 @@ proc.stdout.read(1)  # trailing newline
 
 ## Comparing results
 
-`harness/run.py` runs a strategy against a repo and reports pack size, timing, and delta statistics:
+`harness/run.py` runs a strategy against a repo and reports pack size and timing:
 
 ```bash
 # Default algorithm
@@ -122,7 +145,6 @@ python3 harness/run.py --repo corpus/my-repo --label default
 python3 harness/run.py --repo corpus/my-repo \
     --strategy "./my_strategy" \
     --label my-strategy
-
 ```
 
 Output:
@@ -168,7 +190,7 @@ python3 harness/verify.py --layer 5
 |----------|-------------|----------|
 | `strategies/none.py` | Emits `NONE` for every object | Lower-bound bracket (no deltas) |
 | `strategies/replay.py` | Replays recorded `(child, parent)` pairs | Upper-bound bracket (exact match to default) |
-| `strategies/builtin.py` | Exact reimplementation of git's sort + window algorithm using the delta oracle | Reference baseline; byte-identical to default |
+| `strategies/builtin.py` | Exact reimplementation of git's sort + window algorithm using `Q` queries | Reference baseline; byte-identical to default |
 
 ## Project layout
 
@@ -181,9 +203,6 @@ python3 harness/verify.py --layer 5
 │   ├── run.py                    # (strategy × repo) → pack size + stats
 │   ├── verify.py                 # 5-layer verification suite
 │   └── setup-corpus.sh           # clones test repos into corpus/
-├── helpers/
-│   ├── delta-oracle.c            # C helper for exact delta sizes (linked to libgit.a)
-│   └── delta-oracle              # compiled binary (built by build.sh, not tracked)
 ├── strategies/
 │   ├── none.py                   # no deltas
 │   ├── replay.py                 # replay recorded assignments
@@ -196,7 +215,7 @@ python3 harness/verify.py --layer 5
 
 The git fork adds three flags to `git pack-objects`:
 
-- **`--delta-strategy=<cmd>`** — replaces the sort + `ll_find_deltas` block in `prepare_pack()` with a subprocess protocol. Git groups candidates by object type, invokes `<cmd>` once per type, streams descriptors, reads back `(child, parent)` assignments, and applies them directly. Git trusts the strategy's choices — no size-budget or depth filtering is applied.
+- **`--delta-strategy=<cmd>`** — replaces the sort + `ll_find_deltas` block in `prepare_pack()` with the subprocess protocol described above. Git streams all candidates as `D` lines, services `Q` queries by computing deltas with `diff_delta` (caching the result on the candidate's entry), and reads back `A` assignments. Cached deltas are reused at pack-write time when the assignment matches the parent that produced the cached delta.
 
 - **`--record-strategy=<file>`** — after a normal delta-finding run, dumps the `(child, parent)` pairs that were actually selected. Used by `strategies/replay.py` for fidelity testing.
 
