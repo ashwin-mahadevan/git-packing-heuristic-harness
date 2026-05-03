@@ -18,7 +18,14 @@ if [ ! -d "$GIT_SRC" ]; then
     echo "=== Cloning git at $GIT_TAG ==="
     git clone --branch "$GIT_TAG" --depth 1 \
         https://github.com/git/git.git "$GIT_SRC"
+fi
 
+# Ensure the patch is applied. Idempotent: a no-op if it's already applied,
+# self-healing if the source got reset (e.g. by `git reset --hard` or a stash
+# pop in git/).
+if git -C "$GIT_SRC" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+    echo "=== Patch already applied ==="
+else
     echo "=== Applying delta-strategy patch ==="
     git -C "$GIT_SRC" apply "$PATCH_FILE"
 fi
