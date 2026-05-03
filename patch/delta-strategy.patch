@@ -1,17 +1,17 @@
 diff --git a/builtin/pack-objects.c b/builtin/pack-objects.c
-index 0fc0680..85d17e1 100644
+index dd2480a..ccebbcb 100644
 --- a/builtin/pack-objects.c
 +++ b/builtin/pack-objects.c
-@@ -38,6 +38,8 @@
+@@ -41,6 +41,8 @@
  #include "shallow.h"
  #include "promisor-remote.h"
  #include "pack-mtimes.h"
 +#include "run-command.h"
 +#include "compat/nonblock.h"
  #include "parse-options.h"
- 
- /*
-@@ -242,6 +244,10 @@ static int exclude_promisor_objects;
+ #include "pkt-line.h"
+ #include "blob.h"
+@@ -260,6 +262,10 @@ static int exclude_promisor_objects_best_effort;
  
  static int use_delta_islands;
  
@@ -22,7 +22,7 @@ index 0fc0680..85d17e1 100644
  static unsigned long delta_cache_size = 0;
  static unsigned long max_delta_cache_size = DEFAULT_DELTA_CACHE_SIZE;
  static unsigned long cache_max_small_delta_size = 1000;
-@@ -308,13 +314,10 @@ static void *get_delta(struct object_entry *entry)
+@@ -369,13 +375,10 @@ static void *get_delta(struct object_entry *entry)
  		    oid_to_hex(&DELTA(entry)->idx.oid));
  	delta_buf = diff_delta(base_buf, base_size,
  			       buf, size, &delta_size, 0);
@@ -40,8 +40,23 @@ index 0fc0680..85d17e1 100644
  	free(buf);
  	free(base_buf);
  	return delta_buf;
-@@ -3167,6 +3170,392 @@ static int add_ref_tag(const char *tag UNUSED, const char *referent UNUSED, cons
- 	return 0;
+@@ -3351,8 +3354,13 @@ static int should_attempt_deltas(struct object_entry *entry)
+ 	if (DELTA(entry))
+ 		/* This happens if we decided to reuse existing
+ 		 * delta from a pack. "reuse_delta &&" is implied.
++		 *
++		 * With --include-reused under --delta-strategy, hand
++		 * these to the strategy too so it can override the
++		 * reused delta.
+ 		 */
+-		return 0;
++		if (!include_reused || !delta_strategy_cmd)
++			return 0;
+ 
+ 	if (!entry->type_valid ||
+ 	    oe_size_less_than(&to_pack, entry, 50))
+@@ -3582,6 +3590,392 @@ static void ll_find_deltas_by_region(struct object_entry *list,
+ 	stop_progress(&progress_state);
  }
  
 +
@@ -143,13 +158,13 @@ index 0fc0680..85d17e1 100644
 +
 +	parent_entry = find_entry_by_oid(&parent_oid);
 +
-+	child_buf = repo_read_object_file(the_repository, &child_oid,
-+					  &type, &child_size);
++	child_buf = odb_read_object(the_repository->objects, &child_oid,
++				    &type, &child_size);
 +	if (!child_buf)
 +		die(_("unable to read %s"), oid_to_hex(&child_oid));
 +
-+	parent_buf = repo_read_object_file(the_repository, &parent_oid,
-+					   &type, &parent_size);
++	parent_buf = odb_read_object(the_repository->objects, &parent_oid,
++				     &type, &parent_size);
 +	if (!parent_buf) {
 +		free(child_buf);
 +		strbuf_addf(out, "R %s %s\n",
@@ -433,7 +448,7 @@ index 0fc0680..85d17e1 100644
  static void prepare_pack(int window, int depth)
  {
  	struct object_entry **delta_list;
-@@ -3188,7 +3577,8 @@ static void prepare_pack(int window, int depth)
+@@ -3603,7 +3997,8 @@ static void prepare_pack(int window, int depth)
  	if (!pack_to_stdout)
  		do_check_packed_object_crc = 1;
  
@@ -442,24 +457,8 @@ index 0fc0680..85d17e1 100644
 +	    (!delta_strategy_cmd && (!window || !depth)))
  		return;
  
- 	ALLOC_ARRAY(delta_list, to_pack.nr_objects);
-@@ -3197,11 +3587,13 @@ static void prepare_pack(int window, int depth)
- 	for (i = 0; i < to_pack.nr_objects; i++) {
- 		struct object_entry *entry = to_pack.objects + i;
- 
--		if (DELTA(entry))
-+		if (DELTA(entry)) {
- 			/* This happens if we decided to reuse existing
- 			 * delta from a pack.  "reuse_delta &&" is implied.
- 			 */
--			continue;
-+			if (!include_reused || !delta_strategy_cmd)
-+				continue;
-+		}
- 
- 		if (!entry->type_valid ||
- 		    oe_size_less_than(&to_pack, entry, 50))
-@@ -3228,7 +3620,10 @@ static void prepare_pack(int window, int depth)
+ 	if (path_walk)
+@@ -3625,7 +4020,10 @@ static void prepare_pack(int window, int depth)
  		delta_list[n++] = entry;
  	}
  
@@ -471,7 +470,7 @@ index 0fc0680..85d17e1 100644
  		unsigned nr_done = 0;
  
  		if (progress)
-@@ -3239,7 +3634,12 @@ static void prepare_pack(int window, int depth)
+@@ -3637,7 +4035,12 @@ static void prepare_pack(int window, int depth)
  		stop_progress(&progress_state);
  		if (nr_done != nr_deltas)
  			die(_("inconsistency with delta count"));
@@ -484,8 +483,8 @@ index 0fc0680..85d17e1 100644
  	free(delta_list);
  }
  
-@@ -4426,6 +4826,14 @@ int cmd_pack_objects(int argc,
- 			 N_("do not pack objects in promisor packfiles")),
+@@ -5108,6 +5511,14 @@ int cmd_pack_objects(int argc,
+ 			 N_("implies --missing=allow-any")),
  		OPT_BOOL(0, "delta-islands", &use_delta_islands,
  			 N_("respect islands during delta compression")),
 +		OPT_STRING(0, "delta-strategy", &delta_strategy_cmd,

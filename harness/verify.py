@@ -23,7 +23,14 @@ import time
 
 HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HARNESS_GIT = os.path.join(HARNESS_ROOT, "git", "git")
+HARNESS_GIT_DIR = os.path.dirname(HARNESS_GIT)
 STOCK_GIT = shutil.which("git")
+
+# Make sure that when the harness git binary spawns child `git` processes
+# (e.g. `git refs verify` from inside fsck), they find the same harness
+# binary instead of an older system git on PATH.
+os.environ["PATH"] = HARNESS_GIT_DIR + os.pathsep + os.environ.get("PATH", "")
+os.environ["GIT_EXEC_PATH"] = HARNESS_GIT_DIR
 
 
 def sha256_file(path):

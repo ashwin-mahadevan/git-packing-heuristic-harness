@@ -22,6 +22,12 @@ import time
 
 HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HARNESS_GIT = os.path.join(HARNESS_ROOT, "git", "git")
+HARNESS_GIT_DIR = os.path.dirname(HARNESS_GIT)
+
+# Make sure that when the harness git binary spawns child `git` processes,
+# they find the same harness binary instead of a system git on PATH.
+os.environ["PATH"] = HARNESS_GIT_DIR + os.pathsep + os.environ.get("PATH", "")
+os.environ["GIT_EXEC_PATH"] = HARNESS_GIT_DIR
 
 
 def run_pack_objects(repo_path, strategy_cmd=None, record_file=None,

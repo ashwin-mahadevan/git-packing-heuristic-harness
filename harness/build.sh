@@ -11,7 +11,7 @@ set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GIT_SRC="$HARNESS_ROOT/git"
-GIT_TAG="v2.47.0"
+GIT_TAG="v2.54.0"
 PATCH_FILE="$HARNESS_ROOT/patch/delta-strategy.patch"
 
 if [ ! -d "$GIT_SRC" ]; then
