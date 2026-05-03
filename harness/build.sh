@@ -20,15 +20,15 @@ if [ ! -d "$GIT_SRC" ]; then
         https://github.com/git/git.git "$GIT_SRC"
 fi
 
-# Ensure the patch is applied. Idempotent: a no-op if it's already applied,
-# self-healing if the source got reset (e.g. by `git reset --hard` or a stash
-# pop in git/).
-if git -C "$GIT_SRC" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
-    echo "=== Patch already applied ==="
-else
-    echo "=== Applying delta-strategy patch ==="
-    git -C "$GIT_SRC" apply "$PATCH_FILE"
-fi
+# Always start from a known state: reset to the fixed tag (wiping any prior
+# patch / local edits in git/) and apply the current patch. This keeps the
+# binary in lockstep with patch/delta-strategy.patch regardless of whatever
+# state git/ was left in.
+echo "=== Resetting git/ to $GIT_TAG ==="
+git -C "$GIT_SRC" reset --hard "$GIT_TAG"
+
+echo "=== Applying delta-strategy patch ==="
+git -C "$GIT_SRC" apply "$PATCH_FILE"
 
 echo "=== Building git ==="
 make -C "$GIT_SRC" -j"$(nproc)" \
